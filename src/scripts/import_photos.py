@@ -367,9 +367,7 @@ class PhotoImporter:
                         break
                     elif raw_file is None:  # Use any RAW if exact match not found
                         raw_file = f
-                elif (
-                    f.suffix == ".JPG" and f.stem == base_name
-                ):  # Camera JPG (uppercase)
+                elif f.suffix.lower() == ".jpg" and f.stem == base_name:  # Camera JPG
                     camera_jpg = f
 
             # Get date from RAW file first, then camera JPG if RAW missing
@@ -409,7 +407,7 @@ class PhotoImporter:
                         "%Y-%m-%d"
                     )
                     date_source = "file time"
-                except:
+                except Exception:
                     best_date = "unknown-date"
                     date_source = "unknown"
 
@@ -424,64 +422,33 @@ class PhotoImporter:
         return file_dates
 
     def find_camera(self):
-        """Auto-detect camera DCIM"""
-        try:
-            result = subprocess.run(
-                ["lsblk", "-rno", "NAME,RM,SIZE,TYPE,MOUNTPOINT"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-        except:
-            return None
-
-        for line in result.stdout.strip().split("\n"):
-            parts = line.split()
-            if len(parts) >= 4 and parts[1] == "1" and parts[3] == "part":
-                name, _, size, _, mountpoint = (
-                    parts[:5] if len(parts) > 4 else parts + [""]
-                )
-
-                # Check size (8GB-768GB)
-                size_gb = self._parse_size(size)
-                if not (8 <= size_gb <= 768):
-                    continue
-
-                # Mount if needed
-                if not mountpoint:
-                    mountpoint = f"/media/{Path.home().name}/{name}"
-                    try:
-                        subprocess.run(
-                            ["sudo", "mkdir", "-p", mountpoint],
-                            check=True,
-                            capture_output=True,
-                        )
-                        subprocess.run(
-                            ["sudo", "mount", f"/dev/{name}", mountpoint],
-                            check=True,
-                            capture_output=True,
-                        )
-                        self.log("INFO", f"Mounted /dev/{name} at {mountpoint}")
-                    except:
-                        continue
-
-                # Check for DCIM
-                dcim_path = Path(mountpoint) / "DCIM"
-                if dcim_path.exists():
-                    return str(dcim_path)
+        """Find a DCIM directory under common mount points (no sudo)."""
+        candidates = [Path("/media"), Path("/run/media"), Path("/Volumes")]
+        # Windows drive roots (A: to Z:)
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            candidates.append(Path(f"{letter}:/"))
+        for base in candidates:
+            if not base.exists():
+                continue
+            try:
+                for p in base.glob("**/DCIM"):
+                    if p.is_dir():
+                        return str(p)
+            except Exception:
+                continue
         return None
 
     def _parse_size(self, size_str):
-        """Convert size string to GB"""
+        """Deprecated; retained for compatibility."""
         try:
             if size_str.endswith("G"):
                 return float(size_str[:-1])
-            elif size_str.endswith("M"):
+            if size_str.endswith("M"):
                 return float(size_str[:-1]) / 1024
-            elif size_str.endswith("T"):
+            if size_str.endswith("T"):
                 return float(size_str[:-1]) * 1024
-        except:
-            pass
+        except Exception:
+            return 0
         return 0
 
     def run(self, source_dir=None):
@@ -490,9 +457,7 @@ class PhotoImporter:
         if not source_dir:
             source_dir = self.find_camera()
             if not source_dir:
-                self.log(
-                    "ERROR", "No camera found. Connect camera or specify directory."
-                )
+                self.log("ERROR", "No camera found. Connect camera or specify directory.")
                 return False
             self.log("INFO", f"Using camera DCIM: {source_dir}")
 

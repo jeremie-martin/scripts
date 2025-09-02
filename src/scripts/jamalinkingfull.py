@@ -624,11 +624,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Automatically link SRS requirements to interface specifications in Jama"
     )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview what would be linked without making changes",
-    )
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument("--dry-run", action="store_true", default=True, help="Preview links (default)")
+    grp.add_argument("--apply", action="store_true", help="Create relationships")
     parser.add_argument(
         "--specific-srs",
         type=str,
@@ -645,7 +643,7 @@ def main():
             if args.specific_srs in SRS_TO_INTERFACE_MAPPING:
                 interface_ids = SRS_TO_INTERFACE_MAPPING[args.specific_srs]
                 print(f"Processing specific SRS: {args.specific_srs}")
-                if not args.dry_run:
+                if args.apply:
                     linker.process_srs_requirement(args.specific_srs, interface_ids)
                 else:
                     print(
@@ -663,7 +661,7 @@ def main():
                 sys.exit(1)
         else:
             # Process all mappings
-            linker.run_auto_linking(dry_run=args.dry_run)
+            linker.run_auto_linking(dry_run=not args.apply)
 
     except KeyboardInterrupt:
         print("\n\nProcess interrupted by user")

@@ -8,7 +8,7 @@ Handles both individual items and folders (with optional recursive traversal).
 import sys
 import argparse
 import os
-from typing import Optional, List, Set
+from typing import Optional, List
 import pyperclip
 from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
 

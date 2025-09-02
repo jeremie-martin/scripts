@@ -2,14 +2,13 @@
 import sys
 import json
 import argparse
-from typing import Optional, List, Set
-from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
-
-# Initialize JAMA client
-try:
-    jama = load_jama()
-except Exception as e:
-    sys.exit(f"Error: {e}")
+from typing import List
+from scripts.jama.common import (
+    load_jama,
+    get_item_id,
+    collect_keys_from_folder,
+    find_field_key,
+)
 
 
 
@@ -41,29 +40,21 @@ def update_test_fields(jama_client, doc_id: str):
         }
 
         updates = []
-        existing_keys = set()
+        # Determine actual keys present on this item matching our bases
+        key_map = { base: find_field_key(fields, base) for base in field_mappings }
 
-        # Check and prepare updates for existing fields
-        for original_key in fields.keys():
-            # Normalize name by trimming suffix after '$'
-            key_base = original_key.split("$")[0]
-            if key_base in field_mappings:
-                existing_keys.add(key_base)
-                if not fields.get(original_key):
+        # Prepare updates only for actual keys present and currently empty
+        for base, default in field_mappings.items():
+            actual = key_map.get(base)
+            if actual:
+                if not fields.get(actual):
                     updates.append({
-                        "op": "add",
-                        "path": f"/fields/{key_base}",
-                        "value": field_mappings[key_base],
+                        "op": "replace",
+                        "path": f"/fields/{actual}",
+                        "value": default,
                     })
-
-        # Add any missing mapped fields not already in the item
-        missing = set(field_mappings.keys()) - existing_keys
-        for key in missing:
-            updates.append({
-                "op": "add",
-                "path": f"/fields/{key}",
-                "value": field_mappings[key],
-            })
+            else:
+                print(f"Warning: field '{base}' not present on item; skipping", file=sys.stderr)
 
         # Apply updates if any
         if updates:
@@ -91,6 +82,12 @@ def main():
         help="One or more Jama document keys or folder keys containing 'FLD'."
     )
     args = parser.parse_args()
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        print(f"Jama auth error: {e}", file=sys.stderr)
+        return 2
 
     # Gather IDs from args or stdin
     input_ids = []
@@ -128,5 +125,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())

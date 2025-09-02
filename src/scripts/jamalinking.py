@@ -8,7 +8,13 @@ based on comprehensive mapping analysis.
 import sys
 from typing import List, Optional
 from py_jama_rest_client.client import APIException
-from scripts.jama.common import load_jama, get_item_id, rate_limit
+from scripts.jama.common import (
+    load_jama,
+    get_item_id,
+    rate_limit,
+    with_retries,
+    relationship_exists,
+)
 
 # SUT Requirements to Unit Tests mapping based on analysis
 SUT_REQUIREMENTS_TO_TESTS_MAPPING = {
@@ -221,17 +227,8 @@ class JamaAutoLinker:
 
 
     def relationship_exists(self, from_item_id: int, to_item_id: int) -> bool:
-        """Check if a relationship already exists between two items."""
-        try:
-            downstream = self.jama.get_items_downstream_relationships(from_item_id)
-            if any(rel.get("toItem") == to_item_id for rel in downstream):
-                return True
-            upstream = self.jama.get_items_upstream_relationships(to_item_id)
-            if any(rel.get("fromItem") == from_item_id for rel in upstream):
-                return True
-        except Exception:
-            pass
-        return False
+        """Deprecated: use common.relationship_exists; kept for compatibility."""
+        return relationship_exists(self.jama, from_item_id, to_item_id)
 
     def create_relationship(
         self, from_item_id: int, to_item_id: int,
@@ -243,9 +240,9 @@ class JamaAutoLinker:
                 print(f"  → Relationship already exists: {from_key} ↔ {to_key}")
                 self.stats["skipped_links"] += 1
                 return True
-            rel_id = self.jama.post_relationship(
-                from_item=from_item_id, to_item=to_item_id
-            )
+            def _post():
+                return self.jama.post_relationship(from_item=from_item_id, to_item=to_item_id)
+            rel_id = with_retries(_post)
             if rel_id:
                 print(f"  ✓ Created relationship: {from_key} → {to_key} (ID: {rel_id})")
                 self.stats["successful_links"] += 1
@@ -357,10 +354,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Automatically link SUT requirements to unit tests in Jama"
     )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Preview links without making changes"
-    )
+    grp = parser.add_mutually_exclusive_group()
+    grp.add_argument("--dry-run", action="store_true", default=True, help="Preview links (default)")
+    grp.add_argument("--apply", action="store_true", help="Create relationships")
     parser.add_argument(
         "--specific-requirement", type=str,
         help="Process only a specific requirement (e.g., ABSD-DI2_SUT-118)"
@@ -382,7 +378,7 @@ def main():
         if req in SUT_REQUIREMENTS_TO_TESTS_MAPPING:
             tests = SUT_REQUIREMENTS_TO_TESTS_MAPPING[req]
             print(f"Processing specific requirement: {req}")
-            if args.dry_run:
+            if not args.apply:
                 if not tests:
                     print(f"DRY RUN: {req} has no unit tests mapped (would skip)")
                 else:
@@ -395,7 +391,7 @@ def main():
             print(f"Error: Requirement '{req}' not found in mapping")
             sys.exit(1)
     else:
-        linker.run_auto_linking(dry_run=args.dry_run)
+        linker.run_auto_linking(dry_run=not args.apply)
 
 if __name__ == "__main__":
     main()

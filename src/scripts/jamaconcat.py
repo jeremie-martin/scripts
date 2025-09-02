@@ -14,29 +14,19 @@ Options:
 import argparse
 import sys
 import os
-from typing import List, Optional, Set
+from typing import List, Optional
 
 import pyperclip
-from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
-
-# Initialize JAMA client
-try:
-    jama = load_jama()
-except Exception as e:
-    sys.exit(f"Error: {e}")
-
-
-def find_field_key(fields: dict, prefix: str) -> Optional[str]:
-    """
-    Find a key in the fields dict that starts with the given prefix.
-    """
-    for key in fields:
-        if key.lower().startswith(prefix.lower()):
-            return key
-    return None
+from scripts.jama.common import (
+    load_jama,
+    get_item_id,
+    collect_keys_from_folder,
+    find_field_key,
+    jama_url_for_item,
+)
 
 
-def fetch_item(document_key: str, fetch_version: bool = False) -> Optional[str]:
+def fetch_item(jama, document_key: str, fetch_version: bool = False) -> Optional[str]:
     """
     Download a generic item from Jama and return formatted string:
 
@@ -80,8 +70,7 @@ def fetch_item(document_key: str, fetch_version: bool = False) -> Optional[str]:
             latest = 1
         version_suffix = f"v{latest}"
 
-    JAMA_URL = os.getenv("JAMA_URL", "").rstrip("/")
-    url = f"{JAMA_URL}/perspective.req?projectId=55&docId={item_id}"
+    url = jama_url_for_item(item_id)
 
     return (
         f"Document Key: {document_key}{version_suffix}\n"
@@ -119,6 +108,12 @@ def main():
     )
     args = parser.parse_args()
 
+    try:
+        jama = load_jama()
+    except Exception as e:
+        print(f"Jama auth error: {e}", file=sys.stderr)
+        return 2
+
     # Build list of document keys
     document_keys: List[str] = []
 
@@ -151,7 +146,7 @@ def main():
 
     outputs: List[str] = []
     for doc_key in document_keys:
-        result = fetch_item(doc_key, args.fetch_version)
+        result = fetch_item(jama, doc_key, args.fetch_version)
         if result:
             outputs.append(result)
 
@@ -171,5 +166,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())

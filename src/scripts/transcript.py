@@ -47,7 +47,7 @@ def get_title(video_url):
         return f"(Title error: {e})"
 
 
-def get_transcript_with_retry(video_id, lang="en", max_retries=30):
+def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.5):
     """Get transcript with retry logic"""
 
     for attempt in range(max_retries):
@@ -59,7 +59,6 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=30):
         except (TranscriptsDisabled, NoTranscriptFound):
             try:
                 transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                print(transcript_list)  # legacy debug line
                 first = next(iter(transcript_list), None)
                 if first:
                     transcript = first.fetch()
@@ -67,7 +66,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=30):
                 return "(Transcript unavailable or disabled)"
             except Exception:
                 if attempt < max_retries - 1:
-                    time.sleep(0.5)  # Wait before retrying
+                    time.sleep(base_sleep * (2 ** attempt))
                     continue
                 return "(Transcript unavailable or disabled)"
         except VideoUnavailable:
@@ -75,8 +74,8 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=30):
         except Exception as e:
             if attempt < max_retries - 1:
                 with print_lock:
-                    print(f"Transcript attempt {attempt + 1} failed, retrying... ({e})")
-                time.sleep(0.5)  # Wait before retrying
+                    print(f"Transcript attempt {attempt + 1} failed, retrying... ({e})", file=sys.stderr)
+                time.sleep(base_sleep * (2 ** attempt))
                 continue
             return f"(Transcript error after {max_retries} attempts: {e})"
 

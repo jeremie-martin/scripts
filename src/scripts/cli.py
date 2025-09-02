@@ -1,6 +1,7 @@
 from __future__ import annotations
 import subprocess, sys
 from importlib.metadata import entry_points
+from . import __version__
 import typer
 
 app = typer.Typer(help="Utility scripts — use discrete commands directly, or `scripts run <cmd> -- …`. ")
@@ -10,7 +11,7 @@ def _available_commands() -> dict[str, str]:
     cmds: dict[str, str] = {}
     for ep in eps:
         # only show commands provided by this package
-        if isinstance(ep.value, str) and ep.value.startswith("scripts."):
+        if ep.name != "scripts" and isinstance(ep.value, str) and ep.value.startswith("scripts."):
             cmds[ep.name] = ep.value
     return dict(sorted(cmds.items()))
 
@@ -23,6 +24,11 @@ def list():  # noqa: A003 (shadow built-in)
         raise typer.Exit(1)
     for name, target in cmds.items():
         typer.echo(f"{name:16} -> {target}")
+
+@app.command()
+def version():
+    """Show scripts package version."""
+    typer.echo(__version__)
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def run(ctx: typer.Context, cmd: str):

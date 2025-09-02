@@ -55,7 +55,7 @@ fi
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
 # Ensure remote dir exists (ALLOW password prompt)
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p ${REMOTE_DIR}"
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p \"${REMOTE_DIR}\""
 
 # Build rsync (use same SSH options)
 RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
@@ -88,7 +88,7 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="\$HOME/.local/bin:\$PATH"
 fi
 
-cd ${REMOTE_DIR}
+cd "${REMOTE_DIR}"
 echo '📦 make sync'
 make sync
 echo '🔄 make retool'

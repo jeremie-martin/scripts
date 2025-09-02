@@ -30,10 +30,12 @@ uv run jamalinking …    # needs --extra jama
 uv run jamalinkingfull … # needs --extra jama
 uv run jamanotest …     # needs --extra jama
 uv run jamatmp …        # needs --extra jama
+# Linkers default to DRY RUN; pass --apply to execute
 uv run 2twi …           # ImageMagick (writes to twi/, dir must pre-exist)
 uv run img-twi …        # ImageMagick (writes to twi/, dir must pre-exist)
 uv run 2work …          # ImageMagick (writes to ../working/, dir must pre-exist)
 uv run img-work …       # ImageMagick (writes to ../working/, dir must pre-exist)
+                         # If ImageMagick is missing, the script exits with a helpful error.
 ```
 
 Umbrella wrapper (optional):

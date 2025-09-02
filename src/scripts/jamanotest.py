@@ -13,21 +13,15 @@ Options:
 """
 import sys
 import argparse
-from typing import List, Set, Optional, Dict
+from typing import List
 from py_jama_rest_client.client import APIException
 from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
 
-# Initialize JAMA client
-try:
-    jama = load_jama()
-except Exception as e:
-    sys.exit(f"Error: {e}")
 
 
 
 
-
-def get_downstream_coverage(item_id: int) -> List[str]:
+def get_downstream_coverage(jama, item_id: int) -> List[str]:
     """Fetch downstream-relationship items and return those with test document keys."""
     try:
         rels = jama.get_items_downstream_relationships(item_id)
@@ -48,13 +42,13 @@ def get_downstream_coverage(item_id: int) -> List[str]:
     return covered
 
 
-def check_coverage_for_key(doc_key: str) -> bool:
+def check_coverage_for_key(jama, doc_key: str) -> bool:
     """Check and report coverage for a single document key."""
     item_id = get_item_id(jama, doc_key)
     if not item_id:
         print(f"Error: item '{doc_key}' not found.")
         return False
-    coverage = get_downstream_coverage(item_id)
+    coverage = get_downstream_coverage(jama, item_id)
     print(f"\nDocument Key: {doc_key}")
     if coverage:
         print("Covered by tests:")
@@ -73,6 +67,12 @@ def main():
     parser.add_argument("keys", nargs="+", metavar="JAMA_KEY",
                         help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD-XYZ)")
     args = parser.parse_args()
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        print(f"Jama auth error: {e}", file=sys.stderr)
+        return 2
 
     all_keys: List[str] = []
     for key in args.keys:
@@ -96,7 +96,7 @@ def main():
     covered_count = 0
     print("\n=== Test Coverage Report ===")
     for k in all_keys:
-        if check_coverage_for_key(k):
+        if check_coverage_for_key(jama, k):
             covered_count += 1
 
     print("\n=== Summary ===")
@@ -105,5 +105,4 @@ def main():
     print(f"Items missing coverage: {total - covered_count}")
 
 if __name__ == "__main__":
-    main()
-
+    raise SystemExit(main())
