@@ -18,13 +18,13 @@ def download_youtube(url: str) -> str:
     cmd_name = [YTDLP, "--get-filename", "-o", "%(id)s.%(ext)s", "--no-playlist", url]
     name = subprocess.check_output(cmd_name, text=True).strip()
     # download (1080p or below)
-    cmd_dl = [YTDLP, "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]", "-o", f"{outdir}/%(id)s.%(ext)s", "--no-playlist", url]
+    cmd_dl = [YTDLP, "-q", "--no-warnings", "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]", "-o", f"{outdir}/%(id)s.%(ext)s", "--no-playlist", url]
     subprocess.run(cmd_dl, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return os.path.join(outdir, name)
 
 
 def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int|None) -> list[str]:
-    args = [FFMPEG, "-ss", start, "-to", end, "-i", inp]
+    args = [FFMPEG, "-y", "-ss", start, "-to", end, "-i", inp]
     ext = out.rsplit(".", 1)[-1].lower()
     if ext in {"mp3","aac","wav","ogg","flac"}:
         args += ["-vn"]

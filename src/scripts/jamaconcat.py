@@ -13,6 +13,7 @@ Options:
 
 import argparse
 import sys
+import os
 from typing import List, Optional, Set
 
 import pyperclip
@@ -44,7 +45,7 @@ def fetch_item(document_key: str, fetch_version: bool = False) -> Optional[str]:
     Document Description:
     <Raw HTML Description>
     """
-    item_id = get_item_id(document_key)
+    item_id = get_item_id(jama, document_key)
     if not item_id:
         print(
             f"Error: Could not find item with document key '{document_key}'",
@@ -120,7 +121,7 @@ def main():
     # Build list of document keys
     document_keys: List[str] = []
 
-    # if args.keys is a text file which exists, just loads all the keys from the text file (either absolute or relative paths)
+    # if args.keys is a text file, load keys from it (absolute or relative path)
     if os.path.isfile(args.keys[0]):
         with open(args.keys[0], "r") as f:
             keys = [line.strip() for line in f if line.strip()]
@@ -129,7 +130,7 @@ def main():
 
     for key in keys:
         if "FLD" in key.upper():
-            folder_id = get_item_id(key)
+            folder_id = get_item_id(jama, key)
             if not folder_id:
                 print(
                     f"Error: Could not find folder with document key '{key}'",

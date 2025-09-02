@@ -3,18 +3,18 @@
 Script to find all upstream-linked Jama items for a source key and link them
 to a target item key. Supports dry-run mode.
 """
-
+from __future__ import annotations
 import argparse
 from py_jama_rest_client.client import APIException, AlreadyExistsException
 from scripts.jama.common import load_jama, get_item_id, rate_limit
 
 
-def get_upstream_items(jama: JamaClient, item_id: int):
+def get_upstream_items(jama, item_id: int):
     """Return a list of dicts for items that link upstream to the given item."""
     # You can also use get_items_upstream_relationships if you need the raw relationships
     return jama.get_items_upstream_related(item_id)
 
-def link_upstream_to_target(jama: JamaClient, source_key: str, target_key: str, dry_run: bool):
+def link_upstream_to_target(jama, source_key: str, target_key: str, dry_run: bool):
     print(f"\n— Processing mapping {source_key} → {target_key} —")
     src_id = get_item_id(jama, source_key)
     tgt_id = get_item_id(jama, target_key)

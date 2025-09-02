@@ -1,60 +1,72 @@
-from typer import Typer
-from rich import print
+from __future__ import annotations
+import subprocess, sys
+from importlib.metadata import entry_points
+import typer
 
-app = Typer(help="Utility scripts — run `scripts <command> --help`.")
+app = typer.Typer(help="Utility scripts — use discrete commands directly, or `scripts run <cmd> -- …`. ")
 
-# Light wrappers that reuse existing modules
+def _available_commands() -> dict[str, str]:
+    eps = entry_points(group="console_scripts")
+    cmds: dict[str, str] = {}
+    for ep in eps:
+        # only show commands provided by this package
+        if isinstance(ep.value, str) and ep.value.startswith("scripts."):
+            cmds[ep.name] = ep.value
+    return dict(sorted(cmds.items()))
+
 @app.command()
-def concat(patterns: list[str] = [], terminal: bool = False):
-    import scripts.concat as m
-    # delegate to module-level main if flags diverge; here we just call it
-    m.main()
+def list():  # noqa: A003 (shadow built-in)
+    """List console_scripts exposed by this package."""
+    cmds = _available_commands()
+    if not cmds:
+        typer.echo("(no commands found)")
+        raise typer.Exit(1)
+    for name, target in cmds.items():
+        typer.echo(f"{name:16} -> {target}")
 
-@app.command()
-def transcript(urls: list[str] = []):
-    import scripts.transcript as m
-    m.main()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def run(ctx: typer.Context, cmd: str):
+    """Run a discrete command with its own flags: `scripts run concat -- <args>`"""
+    # prefer executing the installed entry point by name (so help/exit codes match)
+    args = [cmd, *ctx.args]
+    code = subprocess.call(args)
+    raise typer.Exit(code)
 
-# Jama namespace
-jama = Typer(help="Jama utilities")
+# Convenience nested group for Jama: forwards to discrete CLIs
+jama = typer.Typer(help="Jama utilities (forwards to jamaclean, jamaconcat, …)")
 app.add_typer(jama, name="jama")
 
-@jama.command("clean")
-def jama_clean():
-    import scripts.jamaclean as m
-    m.main()
+def _forward(cmd: str, rest: list[str]) -> int:
+    return subprocess.call([cmd, *rest])
 
-@jama.command("concat")
-def jama_concat():
-    import scripts.jamaconcat as m
-    m.main()
+@jama.command("clean", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_clean(ctx: typer.Context):
+    raise typer.Exit(_forward("jamaclean", ctx.args))
 
-@jama.command("concatfull")
-def jama_concatfull():
-    import scripts.jamaconcatfull as m
-    m.main()
+@jama.command("concat", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_concat(ctx: typer.Context):
+    raise typer.Exit(_forward("jamaconcat", ctx.args))
 
-@jama.command("filltests")
-def jama_filltests():
-    import scripts.jamafilltests as m
-    m.main()
+@jama.command("concatfull", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_concatfull(ctx: typer.Context):
+    raise typer.Exit(_forward("jamaconcatfull", ctx.args))
 
-@jama.command("linking")
-def jama_linking():
-    import scripts.jamalinking as m
-    m.main()
+@jama.command("filltests", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_filltests(ctx: typer.Context):
+    raise typer.Exit(_forward("jamafilltests", ctx.args))
 
-@jama.command("linkingfull")
-def jama_linkingfull():
-    import scripts.jamalinkingfull as m
-    m.main()
+@jama.command("linking", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_linking(ctx: typer.Context):
+    raise typer.Exit(_forward("jamalinking", ctx.args))
 
-@jama.command("notest")
-def jama_notest():
-    import scripts.jamanotest as m
-    m.main()
+@jama.command("linkingfull", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_linkingfull(ctx: typer.Context):
+    raise typer.Exit(_forward("jamalinkingfull", ctx.args))
 
-@jama.command("tmp")
-def jama_tmp():
-    import scripts.jamatmp as m
-    m.main()
+@jama.command("notest", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_notest(ctx: typer.Context):
+    raise typer.Exit(_forward("jamanotest", ctx.args))
+
+@jama.command("tmp", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_tmp(ctx: typer.Context):
+    raise typer.Exit(_forward("jamatmp", ctx.args))

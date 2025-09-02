@@ -50,7 +50,7 @@ def get_downstream_coverage(item_id: int) -> List[str]:
 
 def check_coverage_for_key(doc_key: str) -> bool:
     """Check and report coverage for a single document key."""
-    item_id = get_item_id(doc_key)
+    item_id = get_item_id(jama, doc_key)
     if not item_id:
         print(f"Error: item '{doc_key}' not found.")
         return False
@@ -77,7 +77,7 @@ def main():
     all_keys: List[str] = []
     for key in args.keys:
         if "FLD" in key.upper():
-            fid = get_item_id(key)
+            fid = get_item_id(jama, key)
             if fid:
                 found = collect_keys_from_folder(jama, fid, recursive=args.recursive)
                 if not found:

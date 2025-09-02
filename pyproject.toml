@@ -1,26 +1,33 @@
 [project]
 name = "scripts"
-version = "0.1.1"
+version = "0.1.2"
 description = "Utility scripts for development and automation"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "beautifulsoup4>=4.13.5",
-  "py-jama-rest-client>=1.17.1",
   "pyperclip>=1.9.0",
   "python-dotenv>=1.0.1",
-  "youtube-transcript-api>=1.2.2",
-  "yt-dlp>=2025.8.27",
   "typer>=0.12.3",
   "rich>=13.7.1",
 ]
+
+[project.optional-dependencies]
+# Keep base install light; opt into features as needed
+jama = ["py-jama-rest-client>=1.17.1"]
+media = [
+  "youtube-transcript-api>=1.2.2",
+  # keep flexible, yt-dlp updates frequently
+  "yt-dlp>=2024.10.0",
+]
+full = ["scripts[jama,media]"]
 
 [project.scripts]
 # keep direct commands for muscle memory
 concat = "scripts.concat:main"
 transcript = "scripts.transcript:main"
 ffcut = "scripts.ffcut:main"
-gdiffpath = "scripts.git_tools:gdiffpath"
+gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
 # jama tools (stay discrete *and* available via `scripts jama …`)
 jamaclean = "scripts.jamaclean:main"
@@ -34,6 +41,9 @@ jamatmp = "scripts.jamatmp:main"
 # image tools
 2twi = "scripts.img_tools:cmd_2twi"
 2work = "scripts.img_tools:cmd_2work"
+# Windows-friendly aliases (optional)
+img-twi = "scripts.img_tools:cmd_2twi"
+img-work = "scripts.img_tools:cmd_2work"
 # umbrella CLI
 scripts = "scripts.cli:app"
 

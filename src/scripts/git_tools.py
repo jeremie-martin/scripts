@@ -20,3 +20,6 @@ def gdiffpath(staged: bool = False, target: str = ""):
     except subprocess.CalledProcessError as e:
         print(e, file=sys.stderr)
         raise SystemExit(1)
+
+def main():
+    app()

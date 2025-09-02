@@ -19,7 +19,7 @@ def update_test_fields(jama_client, doc_id: str):
     """
     try:
         # Find the item ID by document key
-        item_id = get_item_id(doc_id)
+        item_id = get_item_id(jama_client, doc_id)
         if not item_id:
             print(f"Error: Could not find item with document key '{doc_id}'", file=sys.stderr)
             return
@@ -107,7 +107,7 @@ def main():
     document_keys: List[str] = []
     for key in input_ids:
         if "FLD" in key.upper():
-            folder_id = get_item_id(key)
+            folder_id = get_item_id(jama, key)
             if not folder_id:
                 print(f"Error: Could not find folder with document key '{key}'", file=sys.stderr)
                 continue
