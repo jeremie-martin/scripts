@@ -89,16 +89,6 @@ def jama_filltests(ctx: typer.Context):
     raise typer.Exit(_forward("jamafilltests", ctx.args))
 
 
-@jama.command("linking", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def jama_linking(ctx: typer.Context):
-    raise typer.Exit(_forward("jamalinking", ctx.args))
-
-
-@jama.command("linkingfull", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def jama_linkingfull(ctx: typer.Context):
-    raise typer.Exit(_forward("jamalinkingfull", ctx.args))
-
-
 @jama.command("notest", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_notest(ctx: typer.Context):
     raise typer.Exit(_forward("jamanotest", ctx.args))

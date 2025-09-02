@@ -28,8 +28,6 @@ uv run jamaclean …     # needs --extra jama
 uv run jamaconcat …    # needs --extra jama
 uv run jamaconcatfull … # needs --extra jama
 uv run jamafilltests …  # needs --extra jama
-uv run jamalinking …    # needs --extra jama
-uv run jamalinkingfull … # needs --extra jama
 uv run jamanotest …     # needs --extra jama
 uv run jamatmp …        # needs --extra jama
 # Linkers default to DRY RUN; pass --apply to execute

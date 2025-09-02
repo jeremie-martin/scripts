@@ -37,7 +37,6 @@ def clean_html(html: str) -> str:
     return str(soup).replace("\xa0", "&nbsp;")
 
 
-
 def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
     """
     Fetches a Jama item, cleans its HTML description, patches the item
