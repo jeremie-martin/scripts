@@ -1,0 +1,226 @@
+#!/home/holo/.local/bin/.venv/bin/python
+"""
+Script to download generic Jama items by document key (or all items in a folder detected by key prefix),
+fetch raw HTML description, and output each item's title and description,
+optionally copying to the clipboard.
+
+Usage:
+    python your_script.py [--recursive] [--version] JAMA_KEY [JAMA_KEY ...]
+Options:
+    -r, --recursive   Recursively fetch items in subfolders for folder keys.
+    -v, --version     Fetch and append the Jama item version to each document key.
+"""
+
+import argparse
+import os
+import sys
+from typing import List, Optional, Set
+
+import pyperclip
+from py_jama_rest_client.client import JamaClient
+
+JAMA_URL = os.getenv("JAMA_URL")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+
+if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
+    sys.exit(
+        f"Error: Missing one or more required environment variables: "
+        f"JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
+    )
+# ----------------------------------------------------------------
+
+# Initialize JAMA client
+jama = JamaClient(
+    host_domain=JAMA_URL, oauth=True, credentials=(CLIENT_ID, CLIENT_SECRET)
+)
+
+
+def get_item_id(document_key: str) -> Optional[int]:
+    """
+    Get Jama internal item ID from a document key.
+    """
+    items = jama.get_abstract_items(contains=document_key)
+    for item in items:
+        if item.get("documentKey") == document_key:
+            return item.get("id")
+    return None
+
+
+def find_field_key(fields: dict, prefix: str) -> Optional[str]:
+    """
+    Find a key in the fields dict that starts with the given prefix.
+    """
+    for key in fields:
+        if key.lower().startswith(prefix.lower()):
+            return key
+    return None
+
+
+def fetch_item(document_key: str, fetch_version: bool = False) -> Optional[str]:
+    """
+    Download a generic item from Jama and return formatted string:
+
+    Document Key: <document_key>[v<version>]
+    Document Title: <title>
+    Document Description:
+    <Raw HTML Description>
+    """
+    item_id = get_item_id(document_key)
+    if not item_id:
+        print(
+            f"Error: Could not find item with document key '{document_key}'",
+            file=sys.stderr,
+        )
+        return None
+
+    try:
+        item = jama.get_item(item_id)
+    except Exception as e:
+        print(f"Error retrieving item '{document_key}': {e}", file=sys.stderr)
+        return None
+
+    fields = item.get("fields", {})
+    title = fields.get("name", document_key).strip()
+    desc_key = find_field_key(fields, "description")
+    description_html = fields.get(desc_key, "") if desc_key else ""
+
+    print("Processing item:", document_key)
+
+    # optionally fetch version metadata
+    version_suffix = ""
+    if fetch_version:
+        try:
+            versions = jama.get_item_versions(item_id)
+            latest = max(v.get("versionNumber", 1) for v in versions) if versions else 1
+        except Exception as e:
+            print(
+                f"Warning: could not fetch versions for '{document_key}': {e}",
+                file=sys.stderr,
+            )
+            latest = 1
+        version_suffix = f"v{latest}"
+
+    url = f"{JAMA_URL}/perspective.req?projectId=55&docId={item_id}"
+
+    return (
+        f"Document Key: {document_key}{version_suffix}\n"
+        f"Document URL: {url}\n"
+        f"Document Title: {title}\n"
+        f"Document Description:\n{description_html}\n"
+    )
+
+
+def collect_keys_from_folder(
+    folder_id: int, recursive: bool = False, seen: Set[int] = None
+) -> List[str]:
+    """
+    Fetch all document keys from items in the given Jama folder.
+    If recursive=True, traverse subfolders as well.
+    """
+    if seen is None:
+        seen = set()
+    keys: List[str] = []
+
+    try:
+        children = jama.get_item_children(folder_id)
+    except Exception as e:
+        print(f"Error fetching children for folder {folder_id}: {e}", file=sys.stderr)
+        return keys
+
+    for child in children:
+        cid = child.get("id")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        fields = child.get("fields", {})
+        doc_key = fields.get("documentKey")
+        # If it has a document key, add it
+        if doc_key:
+            keys.append(doc_key)
+        # Otherwise, assume it's a folder and recurse if requested
+        elif recursive:
+            keys.extend(collect_keys_from_folder(cid, recursive, seen))
+
+    return keys
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Download and output generic Jama items with raw HTML descriptions."
+    )
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="Recursively fetch items in subfolders for folder keys.",
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        dest="fetch_version",
+        action="store_true",
+        help="Fetch and append the Jama item version to each document key.",
+    )
+    parser.add_argument(
+        "keys",
+        nargs="+",
+        metavar="JAMA_KEY",
+        help="One or more Jama document keys (e.g., ABSD-SWVER-257) or folder keys containing 'FLD'.",
+    )
+    args = parser.parse_args()
+
+    # Build list of document keys
+    document_keys: List[str] = []
+
+    # if args.keys is a text file which exists, just loads all the keys from the text file (either absolute or relative paths)
+    if os.path.isfile(args.keys[0]):
+        with open(args.keys[0], "r") as f:
+            keys = [line.strip() for line in f if line.strip()]
+    else:
+        keys = args.keys
+
+    for key in keys:
+        if "FLD" in key.upper():
+            folder_id = get_item_id(key)
+            if not folder_id:
+                print(
+                    f"Error: Could not find folder with document key '{key}'",
+                    file=sys.stderr,
+                )
+                continue
+            found = collect_keys_from_folder(folder_id, recursive=args.recursive)
+            if not found:
+                print(f"No items found in folder '{key}'.", file=sys.stderr)
+            else:
+                document_keys.extend(found)
+        else:
+            document_keys.append(key)
+
+    if not document_keys:
+        sys.exit(1)
+
+    outputs: List[str] = []
+    for doc_key in document_keys:
+        result = fetch_item(doc_key, args.fetch_version)
+        if result:
+            outputs.append(result)
+
+    combined = "\n".join(outputs)
+    if not combined:
+        sys.exit(1)
+
+    # Print to terminal
+    print(combined)
+
+    # Copy combined output to clipboard by default
+    try:
+        pyperclip.copy(combined)
+        print("\nCombined output has been copied to the clipboard.")
+    except Exception as e:
+        print(f"\nFailed to copy to clipboard: {e}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
+

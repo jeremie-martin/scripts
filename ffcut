@@ -1,0 +1,169 @@
+#!/bin/bash
+
+# Function to print usage
+print_usage() {
+    echo "Usage: ffcut <input_file_or_youtube_url> <start_time> <end_time> <output_file> [-crf <value>] [-scale <height>]"
+    echo "  -crf <value>   : Constant Rate Factor (default: 22)"
+    echo "  -scale <height>: Scale video to specified height while maintaining aspect ratio"
+}
+
+download_youtube() {
+    local url="$1"
+    local output_dir="$HOME/ytmp"
+    mkdir -p "$output_dir"
+    
+    # Suppress yt-dlp output and store the filename
+    local filename=$(yt-dlp --get-filename -o "%(id)s.%(ext)s" --no-playlist "$url" 2>/dev/null)
+    
+    # Download the video silently
+    yt-dlp -f "bestvideo[height<=1080]+bestaudio/best[height<=1080]" -o "$output_dir/%(id)s.%(ext)s" --no-playlist "$url" >/dev/null 2>&1
+    
+    # Only echo the full path of the downloaded file
+    echo "$output_dir/$filename"
+}
+
+# Check for minimum required arguments
+if [ $# -lt 4 ]; then
+    print_usage
+    exit 1
+fi
+
+input=$1
+start_time=$2
+end_time=$3
+output_file=$4
+shift 4
+
+# Default values
+crf=22
+scale=""
+
+# Parse optional arguments
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        -crf)
+            crf="$2"
+            shift 2
+            ;;
+        -scale)
+            scale="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            print_usage
+            exit 1
+            ;;
+    esac
+done
+
+# Check if input is a YouTube URL
+if [[ $input =~ ^https?://.*youtube.com/.*$ || $input =~ ^https?://.*youtu.be/.*$ ]]; then
+    echo "YouTube URL detected. Downloading video..."
+    video_input=$(download_youtube "$input")
+    if [ $? -ne 0 ]; then
+        echo "Error downloading YouTube video"
+        exit 1
+    fi
+    echo "Video downloaded: $video_input"
+else
+    video_input=$input
+fi
+
+
+
+# prepare ffmpeg command
+ffmpeg_cmd="ffmpeg -ss \"$start_time\" -to \"$end_time\" -i \"$video_input\""
+
+# determine output format
+extension="${output_file##*.}"
+if [[ $extension =~ ^(mp3|aac|wav|ogg|flac)$ ]]; then
+    # audio extraction
+    ffmpeg_cmd+=" -vn"
+    case $extension in
+        mp3)  ffmpeg_cmd+=" -c:a libmp3lame" ;;
+        aac)  ffmpeg_cmd+=" -c:a aac" ;;
+        wav)  ffmpeg_cmd+=" -c:a pcm_s16le" ;;
+        ogg)  ffmpeg_cmd+=" -c:a libvorbis" ;;
+        flac) ffmpeg_cmd+=" -c:a flac" ;;
+    esac
+    echo "extracting audio to $output_file"
+else
+    # video processing (Twitter-compatible MP4)
+    ffmpeg_cmd+=" \
+        -c:v libx264 \
+        -profile:v baseline -level 3.1 \
+        -pix_fmt yuv420p \
+        -crf $crf \
+        -c:a aac -ac 2 \
+        -movflags +faststart \
+        -metadata major_brand=mp42 \
+        -metadata compatible_brands=iso6avc1mp41 \
+        -strict experimental"
+
+    # apply scaling if specified
+    if [ -n "$scale" ]; then
+        # ensure height is divisible by 2
+        scale=$((scale / 2 * 2))
+        ffmpeg_cmd+=" -vf \"scale=-2:$scale,format=yuv420p\""
+    else
+        ffmpeg_cmd+=" -vf \"format=yuv420p\""
+    fi
+
+    echo "processing video to $output_file (Twitter-ready MP4)"
+fi
+
+# add output file to command
+ffmpeg_cmd+=" \"$output_file\""
+
+echo "running $ffmpeg_cmd"
+
+# finally, run it
+eval $ffmpeg_cmd
+
+# # prepare ffmpeg command
+# ffmpeg_cmd="ffmpeg -ss \"$start_time\" -to \"$end_time\" -i \"$video_input\""
+# 
+# 
+# # determine output format
+# extension="${output_file##*.}"
+# if [[ $extension =~ ^(mp3|aac|wav|ogg|flac)$ ]]; then
+    # # audio extraction
+    # ffmpeg_cmd+=" -vn"
+    # case $extension in
+        # mp3)  ffmpeg_cmd+=" -c:a libmp3lame" ;;
+        # aac)  ffmpeg_cmd+=" -c:a aac" ;;
+        # wav)  ffmpeg_cmd+=" -c:a pcm_s16le" ;;
+        # ogg)  ffmpeg_cmd+=" -c:a libvorbis" ;;
+        # flac) ffmpeg_cmd+=" -c:a flac" ;;
+    # esac
+    # echo "extracting audio to $output_file"
+# else
+    # # video processing
+    # ffmpeg_cmd+=" -c:v libx264 -crf $crf -c:a aac -strict experimental"
+    # 
+    # # apply scaling if specified
+    # if [ ! -z "$scale" ]; then
+        # # ensure height is divisible by 2
+        # scale=$((scale / 2 * 2))
+        # ffmpeg_cmd+=" -vf \"scale=-2:$scale,format=yuv420p\""
+    # else
+        # ffmpeg_cmd+=" -vf \"format=yuv420p\""
+    # # fi
+    # echo "processing video to $output_file"
+# fi
+# 
+# add output file to command
+# ffmpeg_cmd+=" \"$output_file\""
+# 
+# # Execute ffmpeg command
+# eval $ffmpeg_cmd
+
+# Check if ffmpeg was successful
+if [ $? -eq 0 ]; then
+    echo "File processed successfully: $output_file"
+else
+    echo "Error processing file"
+    exit 1
+fi
