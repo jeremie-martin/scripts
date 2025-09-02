@@ -52,9 +52,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.
 
     for attempt in range(max_retries):
         try:
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id, languages=[lang, "en", "en-US"]
-            )
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang, "en", "en-US"])
             return " ".join([x["text"] for x in transcript])
         except (TranscriptsDisabled, NoTranscriptFound):
             try:
@@ -66,7 +64,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.
                 return "(Transcript unavailable or disabled)"
             except Exception:
                 if attempt < max_retries - 1:
-                    time.sleep(base_sleep * (2 ** attempt))
+                    time.sleep(base_sleep * (2**attempt))
                     continue
                 return "(Transcript unavailable or disabled)"
         except VideoUnavailable:
@@ -75,7 +73,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.
             if attempt < max_retries - 1:
                 with print_lock:
                     print(f"Transcript attempt {attempt + 1} failed, retrying... ({e})", file=sys.stderr)
-                time.sleep(base_sleep * (2 ** attempt))
+                time.sleep(base_sleep * (2**attempt))
                 continue
             return f"(Transcript error after {max_retries} attempts: {e})"
 
@@ -111,9 +109,7 @@ def process_video(index, raw_url):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Concatenate YouTube video transcripts and copy to clipboard."
-    )
+    parser = argparse.ArgumentParser(description="Concatenate YouTube video transcripts and copy to clipboard.")
     parser.add_argument(
         "-t",
         "--terminal",
@@ -127,17 +123,12 @@ def main():
         default=2,
         help="Number of worker threads (default: 2).",
     )
-    parser.add_argument(
-        "urls", nargs="*", help="YouTube video URLs (if empty, reads from stdin)."
-    )
+    parser.add_argument("urls", nargs="*", help="YouTube video URLs (if empty, reads from stdin).")
 
     args = parser.parse_args()
 
     # Gather URLs from stdin if no args and input is piped
-    if not args.urls and not sys.stdin.isatty():
-        urls = [line.strip() for line in sys.stdin if line.strip()]
-    else:
-        urls = args.urls
+    urls = [line.strip() for line in sys.stdin if line.strip()] if not args.urls and not sys.stdin.isatty() else args.urls
 
     if not urls:
         print("No YouTube URLs provided.")
@@ -150,9 +141,7 @@ def main():
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         # Submit all tasks
-        future_to_index = {
-            executor.submit(process_video, i, url): i for i, url in enumerate(urls)
-        }
+        future_to_index = {executor.submit(process_video, i, url): i for i, url in enumerate(urls)}
 
         # Collect results as they complete
         for future in as_completed(future_to_index):

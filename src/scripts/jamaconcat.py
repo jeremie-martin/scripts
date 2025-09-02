@@ -12,21 +12,21 @@ Options:
 """
 
 import argparse
-import sys
 import os
-from typing import List, Optional
+import sys
 
 import pyperclip
+
 from scripts.jama.common import (
-    load_jama,
-    get_item_id,
     collect_keys_from_folder,
     find_field_key,
+    get_item_id,
     jama_url_for_item,
+    load_jama,
 )
 
 
-def fetch_item(jama, document_key: str, fetch_version: bool = False) -> Optional[str]:
+def fetch_item(jama, document_key: str, fetch_version: bool = False) -> str | None:
     """
     Download a generic item from Jama and return formatted string:
 
@@ -80,13 +80,8 @@ def fetch_item(jama, document_key: str, fetch_version: bool = False) -> Optional
     )
 
 
-
-
-
 def main():
-    parser = argparse.ArgumentParser(
-        description="Download and output generic Jama items with raw HTML descriptions."
-    )
+    parser = argparse.ArgumentParser(description="Download and output generic Jama items with raw HTML descriptions.")
     parser.add_argument(
         "-r",
         "--recursive",
@@ -115,11 +110,11 @@ def main():
         return 2
 
     # Build list of document keys
-    document_keys: List[str] = []
+    document_keys: list[str] = []
 
     # if args.keys is a text file, load keys from it (absolute or relative path)
     if os.path.isfile(args.keys[0]):
-        with open(args.keys[0], "r") as f:
+        with open(args.keys[0]) as f:
             keys = [line.strip() for line in f if line.strip()]
     else:
         keys = args.keys
@@ -144,7 +139,7 @@ def main():
     if not document_keys:
         sys.exit(1)
 
-    outputs: List[str] = []
+    outputs: list[str] = []
     for doc_key in document_keys:
         result = fetch_item(jama, doc_key, args.fetch_version)
         if result:

@@ -184,14 +184,12 @@ def run_fd(base_args, paths, add_default_pattern=False, verbose=False):
     if add_default_pattern:
         cmd.append(".*")  # explicit PATTERN so following args are PATHS
 
-    cmd += ["--print0"] + paths
+    cmd += ["--print0", *paths]
     if verbose:
         print("FD CMD:", " ".join(map(sh_quote, cmd)), file=sys.stderr)
 
     try:
-        out = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
-        )
+        out = subprocess.run(cmd, capture_output=True, check=False)
     except Exception as e:
         if verbose:
             print(f"fd invocation failed: {e}", file=sys.stderr)
@@ -258,11 +256,7 @@ def is_excluded(path, patterns):
             parts = Path(rel).parts
             if folder in parts:
                 return True
-        if (
-            fnmatch.fnmatch(rel, pat)
-            or fnmatch.fnmatch(os.path.basename(rel), pat)
-            or fnmatch.fnmatch(abs_, pat)
-        ):
+        if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(os.path.basename(rel), pat) or fnmatch.fnmatch(abs_, pat):
             return True
     return False
 
@@ -291,9 +285,7 @@ def _looks_text_by_name(path: str) -> bool:
     if base in TEXT_NAMES:
         return True
     ext = os.path.splitext(base)[1].lower().lstrip(".")
-    if ext in TEXT_EXTS:
-        return True
-    return False
+    return ext in TEXT_EXTS
 
 
 def _control_ratio(sample: bytes) -> float:
@@ -311,9 +303,7 @@ def _control_ratio(sample: bytes) -> float:
     return controls / len(sample)
 
 
-def is_probably_text(
-    path: str, encoding: str = "utf-8", max_bytes: int = 65536
-) -> bool:
+def is_probably_text(path: str, encoding: str = "utf-8", max_bytes: int = 65536) -> bool:
     """
     Fast text-vs-binary sniffing.
     - Trusts filename/extension allowlist to avoid I/O for common text.
@@ -344,10 +334,7 @@ def is_probably_text(
             return False
 
         # Guardrail for unusual encodings that still decode: control char ratio
-        if _control_ratio(sample) > 0.30:
-            return False
-
-        return True
+        return not _control_ratio(sample) > 0.3
     except Exception:
         # On any unexpected error during sniffing, err on the side of "not text".
         return False
@@ -398,7 +385,7 @@ def concatenate(
         if add_header:
             print(f"{rel}:", file=output_buffer)
         try:
-            with open(fp, "r", encoding=encoding, errors=errors) as f:
+            with open(fp, encoding=encoding, errors=errors) as f:
                 output_buffer.write(f.read())
         except Exception as e:
             print(f"Error reading '{rel}': {e}", file=sys.stderr)
@@ -437,9 +424,7 @@ def main():
         action="store_true",
         help="Do not print 'path:' header before file contents",
     )
-    parser.add_argument(
-        "--encoding", default="utf-8", help="File encoding (default: utf-8)"
-    )
+    parser.add_argument("--encoding", default="utf-8", help="File encoding (default: utf-8)")
     parser.add_argument(
         "--errors",
         default="replace",
@@ -461,9 +446,7 @@ def main():
         action="store_true",
         help="Log skipped binary files to stderr",
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Verbose (shows fd command)"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose (shows fd command)")
     parser.add_argument(
         "files",
         nargs="*",
@@ -471,13 +454,7 @@ def main():
     )
     args = parser.parse_args()
 
-    inputs = (
-        args.files
-        if args.files
-        else [line.strip() for line in sys.stdin if line.strip()]
-        if not sys.stdin.isatty()
-        else []
-    )
+    inputs = args.files if args.files else [line.strip() for line in sys.stdin if line.strip()] if not sys.stdin.isatty() else []
     if not inputs:
         print(
             "No inputs given. Provide files/dirs/globs or pipe a list on stdin.",
@@ -485,9 +462,7 @@ def main():
         )
         sys.exit(1)
 
-    excludes = (
-        [] if args.no_default_excludes else list(DEFAULT_EXCLUDES)
-    ) + args.exclude
+    excludes = ([] if args.no_default_excludes else list(DEFAULT_EXCLUDES)) + args.exclude
 
     # Try fd; fall back if unavailable or if call failed
     files = gather_with_fd(inputs, excludes, args.gitignore, verbose=args.verbose)
@@ -513,9 +488,7 @@ def main():
     )
 
     if not files:
-        print(
-            "No text files to process (all were binary or excluded).", file=sys.stderr
-        )
+        print("No text files to process (all were binary or excluded).", file=sys.stderr)
         sys.exit(3)
 
     if args.terminal:

@@ -11,17 +11,16 @@ Usage:
 Options:
     -r, --recursive   Recursively fetch items in subfolders for folder keys.
 """
-import sys
+
 import argparse
-from typing import List
+import sys
+
 from py_jama_rest_client.client import APIException
-from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
+
+from scripts.jama.common import collect_keys_from_folder, get_item_id, load_jama
 
 
-
-
-
-def get_downstream_coverage(jama, item_id: int) -> List[str]:
+def get_downstream_coverage(jama, item_id: int) -> list[str]:
     """Fetch downstream-relationship items and return those with test document keys."""
     try:
         rels = jama.get_items_downstream_relationships(item_id)
@@ -62,10 +61,8 @@ def check_coverage_for_key(jama, doc_key: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Check test coverage for Jama items by downstream links.")
-    parser.add_argument("-r", "--recursive", action="store_true",
-                        help="Recursively expand folder keys.")
-    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY",
-                        help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD-XYZ)")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Recursively expand folder keys.")
+    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY", help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD-XYZ)")
     args = parser.parse_args()
 
     try:
@@ -74,7 +71,7 @@ def main():
         print(f"Jama auth error: {e}", file=sys.stderr)
         return 2
 
-    all_keys: List[str] = []
+    all_keys: list[str] = []
     for key in args.keys:
         if "FLD" in key.upper():
             fid = get_item_id(jama, key)
@@ -103,6 +100,7 @@ def main():
     print(f"Total items checked: {total}")
     print(f"Items covered by tests: {covered_count}")
     print(f"Items missing coverage: {total - covered_count}")
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -7,10 +7,9 @@ based on the comprehensive mapping analysis.
 """
 
 import sys
-import json
-from typing import Dict, List, Optional, Tuple
-from py_jama_rest_client.client import JamaClient
+
 from py_jama_rest_client.client import APIException
+
 from scripts.jama.common import load_jama, rate_limit
 
 # Interface ID to Document Key mapping
@@ -382,7 +381,7 @@ class JamaAutoLinker:
             "interface_not_found": 0,
         }
 
-    def get_item_id(self, document_key: str) -> Optional[int]:
+    def get_item_id(self, document_key: str) -> int | None:
         """Get Jama internal item ID from a document key with caching."""
         if document_key in self.item_cache:
             return self.item_cache[document_key]
@@ -429,9 +428,7 @@ class JamaAutoLinker:
 
         return False
 
-    def create_relationship(
-        self, from_item_id: int, to_item_id: int, from_key: str, to_key: str
-    ) -> bool:
+    def create_relationship(self, from_item_id: int, to_item_id: int, from_key: str, to_key: str) -> bool:
         """Create a relationship between two items."""
         try:
             # Check if relationship already exists
@@ -441,14 +438,10 @@ class JamaAutoLinker:
                 return True
 
             # Create the relationship
-            relationship_id = self.jama.post_relationship(
-                from_item=from_item_id, to_item=to_item_id
-            )
+            relationship_id = self.jama.post_relationship(from_item=from_item_id, to_item=to_item_id)
 
             if relationship_id:
-                print(
-                    f"  ✓ Created relationship: {from_key} → {to_key} (ID: {relationship_id})"
-                )
+                print(f"  ✓ Created relationship: {from_key} → {to_key} (ID: {relationship_id})")
                 self.stats["successful_links"] += 1
                 return True
             else:
@@ -466,13 +459,11 @@ class JamaAutoLinker:
                 self.stats["failed_links"] += 1
                 return False
         except Exception as e:
-            print(
-                f"  ✗ Unexpected error creating relationship {from_key} → {to_key}: {e}"
-            )
+            print(f"  ✗ Unexpected error creating relationship {from_key} → {to_key}: {e}")
             self.stats["failed_links"] += 1
             return False
 
-    def process_srs_requirement(self, srs_key: str, interface_keys: List[str]) -> None:
+    def process_srs_requirement(self, srs_key: str, interface_keys: list[str]) -> None:
         """Process a single SRS requirement and its interface mappings."""
         print(f"\nProcessing SRS: {srs_key}")
 
@@ -497,9 +488,7 @@ class JamaAutoLinker:
             # Get interface item ID using document key
             interface_item_id = self.get_item_id(interface_doc_key)
             if not interface_item_id:
-                print(
-                    f"  ✗ Interface item not found: {interface_id} ({interface_doc_key})"
-                )
+                print(f"  ✗ Interface item not found: {interface_id} ({interface_doc_key})")
                 self.stats["interface_not_found"] += 1
                 continue
 
@@ -533,9 +522,7 @@ class JamaAutoLinker:
                     missing_mappings.append(interface_id)
 
         if missing_mappings:
-            print(
-                f"ERROR: Missing document key mappings for interfaces: {set(missing_mappings)}"
-            )
+            print(f"ERROR: Missing document key mappings for interfaces: {set(missing_mappings)}")
             sys.exit(1)
         else:
             print("✓ All interface mappings validated")
@@ -543,9 +530,7 @@ class JamaAutoLinker:
         # Calculate statistics
         self.stats["total_srs"] = len(SRS_TO_INTERFACE_MAPPING)
         self.stats["total_interfaces"] = len(INTERFACE_ID_TO_DOCUMENT_KEY)
-        self.stats["total_mappings"] = sum(
-            len(interfaces) for interfaces in SRS_TO_INTERFACE_MAPPING.values()
-        )
+        self.stats["total_mappings"] = sum(len(interfaces) for interfaces in SRS_TO_INTERFACE_MAPPING.values())
 
         print(f"Total SRS Requirements: {self.stats['total_srs']}")
         print(f"Total Unique Interfaces: {self.stats['total_interfaces']}")
@@ -557,9 +542,7 @@ class JamaAutoLinker:
             for srs_key, interface_ids in SRS_TO_INTERFACE_MAPPING.items():
                 print(f"  {srs_key} → {len(interface_ids)} interfaces:")
                 for interface_id in interface_ids:
-                    interface_doc_key = INTERFACE_ID_TO_DOCUMENT_KEY.get(
-                        interface_id, "NOT FOUND"
-                    )
+                    interface_doc_key = INTERFACE_ID_TO_DOCUMENT_KEY.get(interface_id, "NOT FOUND")
                     print(f"    - {interface_id} ({interface_doc_key})")
             return
 
@@ -589,41 +572,27 @@ class JamaAutoLinker:
         print("-" * 80)
 
         success_rate = (
-            (self.stats["successful_links"] + self.stats["skipped_links"])
-            / self.stats["total_mappings"]
-            * 100
+            (self.stats["successful_links"] + self.stats["skipped_links"]) / self.stats["total_mappings"] * 100
             if self.stats["total_mappings"] > 0
             else 0
         )
         print(f"Overall Success Rate: {success_rate:.1f}%")
 
-        if (
-            self.stats["failed_links"] > 0
-            or self.stats["srs_not_found"] > 0
-            or self.stats["interface_not_found"] > 0
-        ):
+        if self.stats["failed_links"] > 0 or self.stats["srs_not_found"] > 0 or self.stats["interface_not_found"] > 0:
             print("\nISSUES ENCOUNTERED:")
             if self.stats["srs_not_found"] > 0:
-                print(
-                    f"  - {self.stats['srs_not_found']} SRS requirements not found in Jama"
-                )
+                print(f"  - {self.stats['srs_not_found']} SRS requirements not found in Jama")
             if self.stats["interface_not_found"] > 0:
-                print(
-                    f"  - {self.stats['interface_not_found']} interface specifications not found in Jama"
-                )
+                print(f"  - {self.stats['interface_not_found']} interface specifications not found in Jama")
             if self.stats["failed_links"] > 0:
-                print(
-                    f"  - {self.stats['failed_links']} relationships failed to create"
-                )
+                print(f"  - {self.stats['failed_links']} relationships failed to create")
 
 
 def main():
     """Main function to run the auto linker."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Automatically link SRS requirements to interface specifications in Jama"
-    )
+    parser = argparse.ArgumentParser(description="Automatically link SRS requirements to interface specifications in Jama")
     grp = parser.add_mutually_exclusive_group()
     grp.add_argument("--dry-run", action="store_true", default=True, help="Preview links (default)")
     grp.add_argument("--apply", action="store_true", help="Create relationships")
@@ -646,18 +615,12 @@ def main():
                 if args.apply:
                     linker.process_srs_requirement(args.specific_srs, interface_ids)
                 else:
-                    print(
-                        f"DRY RUN: Would link {args.specific_srs} to {len(interface_ids)} interfaces:"
-                    )
+                    print(f"DRY RUN: Would link {args.specific_srs} to {len(interface_ids)} interfaces:")
                     for interface_id in interface_ids:
-                        interface_doc_key = INTERFACE_ID_TO_DOCUMENT_KEY.get(
-                            interface_id, "NOT FOUND"
-                        )
+                        interface_doc_key = INTERFACE_ID_TO_DOCUMENT_KEY.get(interface_id, "NOT FOUND")
                         print(f"  - {interface_id} ({interface_doc_key})")
             else:
-                print(
-                    f"Error: SRS requirement '{args.specific_srs}' not found in mapping"
-                )
+                print(f"Error: SRS requirement '{args.specific_srs}' not found in mapping")
                 sys.exit(1)
         else:
             # Process all mappings

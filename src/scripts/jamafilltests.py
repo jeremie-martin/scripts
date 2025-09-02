@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-import sys
-import json
 import argparse
-from typing import List
+import json
+import sys
+
 from scripts.jama.common import (
-    load_jama,
-    get_item_id,
     collect_keys_from_folder,
     find_field_key,
+    get_item_id,
+    load_jama,
 )
-
 
 
 def update_test_fields(jama_client, doc_id: str):
@@ -33,26 +32,25 @@ def update_test_fields(jama_client, doc_id: str):
             "test_inputs": "N/A",
             "data_collection_actions": "Operator saves the intermediate report.",
             "assumptions__constraints": "N/A",
-            "test_outputs": (
-                "Test result intermediate report containing the date and time the test was run "
-                "along with the test result."
-            ),
+            "test_outputs": ("Test result intermediate report containing the date and time the test was run along with the test result."),
         }
 
         updates = []
         # Determine actual keys present on this item matching our bases
-        key_map = { base: find_field_key(fields, base) for base in field_mappings }
+        key_map = {base: find_field_key(fields, base) for base in field_mappings}
 
         # Prepare updates only for actual keys present and currently empty
         for base, default in field_mappings.items():
             actual = key_map.get(base)
             if actual:
                 if not fields.get(actual):
-                    updates.append({
-                        "op": "replace",
-                        "path": f"/fields/{actual}",
-                        "value": default,
-                    })
+                    updates.append(
+                        {
+                            "op": "replace",
+                            "path": f"/fields/{actual}",
+                            "value": default,
+                        }
+                    )
             else:
                 print(f"Warning: field '{base}' not present on item; skipping", file=sys.stderr)
 
@@ -69,18 +67,9 @@ def update_test_fields(jama_client, doc_id: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Update empty test fields for Jama items by document key or all items in a folder."
-    )
-    parser.add_argument(
-        "-r", "--recursive",
-        action="store_true",
-        help="Recursively fetch items in subfolders for folder keys."
-    )
-    parser.add_argument(
-        "ids", nargs="*",
-        help="One or more Jama document keys or folder keys containing 'FLD'."
-    )
+    parser = argparse.ArgumentParser(description="Update empty test fields for Jama items by document key or all items in a folder.")
+    parser.add_argument("-r", "--recursive", action="store_true", help="Recursively fetch items in subfolders for folder keys.")
+    parser.add_argument("ids", nargs="*", help="One or more Jama document keys or folder keys containing 'FLD'.")
     args = parser.parse_args()
 
     try:
@@ -101,7 +90,7 @@ def main():
         sys.exit(1)
 
     # Resolve folder keys into document keys
-    document_keys: List[str] = []
+    document_keys: list[str] = []
     for key in input_ids:
         if "FLD" in key.upper():
             folder_id = get_item_id(jama, key)

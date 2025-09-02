@@ -1,10 +1,14 @@
 from __future__ import annotations
-import subprocess, sys
+
+import subprocess
 from importlib.metadata import entry_points
-from . import __version__
+
 import typer
 
+from . import __version__
+
 app = typer.Typer(help="Utility scripts — use discrete commands directly, or `scripts run <cmd> -- …`. ")
+
 
 def _available_commands() -> dict[str, str]:
     eps = entry_points(group="console_scripts")
@@ -15,8 +19,9 @@ def _available_commands() -> dict[str, str]:
             cmds[ep.name] = ep.value
     return dict(sorted(cmds.items()))
 
+
 @app.command()
-def list():  # noqa: A003 (shadow built-in)
+def list():
     """List console_scripts exposed by this package."""
     cmds = _available_commands()
     if not cmds:
@@ -25,10 +30,12 @@ def list():  # noqa: A003 (shadow built-in)
     for name, target in cmds.items():
         typer.echo(f"{name:16} -> {target}")
 
+
 @app.command()
 def version():
     """Show scripts package version."""
     typer.echo(__version__)
+
 
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def run(ctx: typer.Context, cmd: str):
@@ -38,40 +45,50 @@ def run(ctx: typer.Context, cmd: str):
     code = subprocess.call(args)
     raise typer.Exit(code)
 
+
 # Convenience nested group for Jama: forwards to discrete CLIs
 jama = typer.Typer(help="Jama utilities (forwards to jamaclean, jamaconcat, …)")
 app.add_typer(jama, name="jama")
 
+
 def _forward(cmd: str, rest: list[str]) -> int:
     return subprocess.call([cmd, *rest])
+
 
 @jama.command("clean", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_clean(ctx: typer.Context):
     raise typer.Exit(_forward("jamaclean", ctx.args))
 
+
 @jama.command("concat", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_concat(ctx: typer.Context):
     raise typer.Exit(_forward("jamaconcat", ctx.args))
+
 
 @jama.command("concatfull", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_concatfull(ctx: typer.Context):
     raise typer.Exit(_forward("jamaconcatfull", ctx.args))
 
+
 @jama.command("filltests", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_filltests(ctx: typer.Context):
     raise typer.Exit(_forward("jamafilltests", ctx.args))
+
 
 @jama.command("linking", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_linking(ctx: typer.Context):
     raise typer.Exit(_forward("jamalinking", ctx.args))
 
+
 @jama.command("linkingfull", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_linkingfull(ctx: typer.Context):
     raise typer.Exit(_forward("jamalinkingfull", ctx.args))
 
+
 @jama.command("notest", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_notest(ctx: typer.Context):
     raise typer.Exit(_forward("jamanotest", ctx.args))
+
 
 @jama.command("tmp", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_tmp(ctx: typer.Context):

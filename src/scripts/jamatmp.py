@@ -3,16 +3,21 @@
 Script to find all upstream-linked Jama items for a source key and link them
 to a target item key. Supports dry-run mode.
 """
+
 from __future__ import annotations
+
 import argparse
-from py_jama_rest_client.client import APIException, AlreadyExistsException
-from scripts.jama.common import load_jama, get_item_id, rate_limit
+
+from py_jama_rest_client.client import AlreadyExistsException, APIException
+
+from scripts.jama.common import get_item_id, load_jama, rate_limit
 
 
 def get_upstream_items(jama, item_id: int):
     """Return a list of dicts for items that link upstream to the given item."""
     # You can also use get_items_upstream_relationships if you need the raw relationships
     return jama.get_items_upstream_related(item_id)
+
 
 def link_upstream_to_target(jama, source_key: str, target_key: str, dry_run: bool):
     print(f"\n— Processing mapping {source_key} → {target_key} —")
@@ -49,15 +54,10 @@ def link_upstream_to_target(jama, source_key: str, target_key: str, dry_run: boo
             # Be polite to the API
             rate_limit(0.1)
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Link all upstream items of a source key to a target key in Jama"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be done, without making any API changes"
-    )
+    parser = argparse.ArgumentParser(description="Link all upstream items of a source key to a target key in Jama")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be done, without making any API changes")
     args = parser.parse_args()
 
     # Initialize client
@@ -74,6 +74,7 @@ def main():
 
     for src, tgt in mappings:
         link_upstream_to_target(jama, src, tgt, dry_run=args.dry_run)
+
 
 if __name__ == "__main__":
     main()

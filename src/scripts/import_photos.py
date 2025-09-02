@@ -66,7 +66,6 @@ import argparse
 import os
 import re
 import shutil
-import subprocess
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -74,9 +73,7 @@ from pathlib import Path
 
 
 class PhotoImporter:
-    def __init__(
-        self, photos_dir, dry_run=False, move_files=False, create_symlinks=False
-    ):
+    def __init__(self, photos_dir, dry_run=False, move_files=False, create_symlinks=False):
         self.photos_dir = Path(photos_dir)
         self.dry_run = dry_run
         self.move_files = move_files
@@ -96,13 +93,9 @@ class PhotoImporter:
             return self.get_destination(base_filename)
 
         # Original camera files
-        if re.match(r"^IMG_\d+\.(JPG|CR3)$", filename) or re.match(
-            r"^MVI_\d+\.MP4$", filename
-        ):
+        if re.match(r"^IMG_\d+\.(JPG|CR3)$", filename) or re.match(r"^MVI_\d+\.MP4$", filename):
             # RAW files go to raw folder
-            if filename.upper().endswith(
-                (".CR3", ".CR2", ".RAW", ".NEF", ".ARW", ".DNG")
-            ):
+            if filename.upper().endswith((".CR3", ".CR2", ".RAW", ".NEF", ".ARW", ".DNG")):
                 return "raw"
             # Camera JPEGs go to jpg folder
             elif filename.upper().endswith(".JPG"):
@@ -159,9 +152,7 @@ class PhotoImporter:
 
                     self.log("INFO", f"Created symlink: {jpeg_file.name}")
                 except OSError as e:
-                    self.log(
-                        "WARN", f"Failed to create symlink for {jpeg_file.name}: {e}"
-                    )
+                    self.log("WARN", f"Failed to create symlink for {jpeg_file.name}: {e}")
 
     def process_file(self, file_path, date_str):
         """Process a single file"""
@@ -203,9 +194,7 @@ class PhotoImporter:
             # Special handling for .xmp sidecar files - always keep the newest
             if file_path.name.lower().endswith(".xmp"):
                 if source_mtime > dest_mtime:
-                    self.log(
-                        "INFO", f"Updating .xmp with newer version: {file_path.name}"
-                    )
+                    self.log("INFO", f"Updating .xmp with newer version: {file_path.name}")
                 elif source_mtime == dest_mtime:
                     self.log("WARN", f"Skipping identical .xmp file: {file_path.name}")
                     return True
@@ -278,11 +267,7 @@ class PhotoImporter:
                         ext = Path(f).suffix.lower()
                         counts[ext_map.get(ext, "other")] += 1
 
-                    parts = [
-                        f"{count} {type_}"
-                        for type_, count in counts.items()
-                        if count > 0
-                    ]
+                    parts = [f"{count} {type_}" for type_, count in counts.items() if count > 0]
                     desc = f": {', '.join(parts)}" if parts else ""
 
                     # Map to actual folder names for display
@@ -317,17 +302,11 @@ class PhotoImporter:
 
         # Show totals
         action = "move" if self.move_files else "copy"
-        parts = [
-            f"{total_counts[t]} {t}"
-            for t in ["raw", "jpg", "video", "xmp", "other"]
-            if total_counts[t] > 0
-        ]
+        parts = [f"{total_counts[t]} {t}" for t in ["raw", "jpg", "video", "xmp", "other"] if total_counts[t] > 0]
         desc = f" ({', '.join(parts)})" if parts else ""
         print(f"📊 Total: Would {action} {total_counts['files']} files{desc}")
         if self.create_symlinks:
-            print(
-                "📋 Camera JPEG symlinks will be created in edits/ for easy comparison\n"
-            )
+            print("📋 Camera JPEG symlinks will be created in edits/ for easy comparison\n")
         else:
             print()
 
@@ -372,17 +351,14 @@ class PhotoImporter:
 
             # Get date from RAW file first, then camera JPG if RAW missing
             best_date = None
-            date_source = None
 
             if raw_file:
                 best_date = self.get_date(raw_file)
-                date_source = "RAW"
                 if best_date == "unknown-date":
                     best_date = None
 
             if not best_date and camera_jpg:
                 best_date = self.get_date(camera_jpg)
-                date_source = "camera JPG"
                 if best_date == "unknown-date":
                     best_date = None
 
@@ -396,20 +372,15 @@ class PhotoImporter:
                     date = self.get_date(f)
                     if date != "unknown-date":
                         best_date = date
-                        date_source = "fallback"
                         break
 
             # Final fallback: use newest file modification time
             if not best_date:
                 try:
                     newest = max(group_files, key=lambda f: f.stat().st_mtime)
-                    best_date = datetime.fromtimestamp(newest.stat().st_mtime).strftime(
-                        "%Y-%m-%d"
-                    )
-                    date_source = "file time"
+                    best_date = datetime.fromtimestamp(newest.stat().st_mtime).strftime("%Y-%m-%d")
                 except Exception:
                     best_date = "unknown-date"
-                    date_source = "unknown"
 
             # Log the date source for debugging if multiple files in group
             # if len(group_files) > 1 and date_source and best_date != 'unknown-date':
@@ -498,20 +469,14 @@ class PhotoImporter:
 
 def main():
     parser = argparse.ArgumentParser(description="Import and organize photos")
-    parser.add_argument(
-        "source", nargs="?", help="Source directory (auto-detect if not specified)"
-    )
+    parser.add_argument("source", nargs="?", help="Source directory (auto-detect if not specified)")
     parser.add_argument(
         "--dest",
         default=str(Path.home() / "photos"),
         help="Destination photos directory (default: ~/photos)",
     )
-    parser.add_argument(
-        "--move", action="store_true", help="Move files instead of copying"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Preview what would be done"
-    )
+    parser.add_argument("--move", action="store_true", help="Move files instead of copying")
+    parser.add_argument("--dry-run", action="store_true", help="Preview what would be done")
     parser.add_argument(
         "--symlinks",
         action="store_true",

@@ -5,16 +5,16 @@ Useful for understanding item types and field structures.
 Handles both individual items and folders (with optional recursive traversal).
 """
 
-import sys
 import argparse
 import os
-from typing import Optional, List
+import sys
+
 import pyperclip
-from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
+
+from scripts.jama.common import collect_keys_from_folder, get_item_id, load_jama
 
 
-
-def fetch_fields(jama_client, document_key: str) -> Optional[str]:
+def fetch_fields(jama_client, document_key: str) -> str | None:
     """
     Download a Jama item by document key and return a formatted string of its fields:
 
@@ -36,22 +36,17 @@ def fetch_fields(jama_client, document_key: str) -> Optional[str]:
         return None
 
     fields = item.get("fields", {})
-    lines: List[str] = [f"{item.get('documentKey', document_key)} ({item_id}) fields:"]
+    lines: list[str] = [f"{item.get('documentKey', document_key)} ({item_id}) fields:"]
     for key, value in fields.items():
         # Normalize value for display
-        if isinstance(value, str):
-            display_value = value.strip()
-        else:
-            display_value = repr(value)
+        display_value = value.strip() if isinstance(value, str) else repr(value)
         lines.append(f"{key}: {display_value}")
 
     return "\n".join(lines)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Download and output Jama item fields by document key or folder key."
-    )
+    parser = argparse.ArgumentParser(description="Download and output Jama item fields by document key or folder key.")
     parser.add_argument(
         "-r",
         "--recursive",
@@ -73,10 +68,10 @@ def main():
         sys.exit(f"Error: {e}")
 
     # Collect document keys, expanding folders if requested
-    document_keys: List[str] = []
+    document_keys: list[str] = []
     # if args.keys is a text file which exists, just loads all the keys from the text file (either absolute or relative paths)
     if os.path.isfile(args.keys[0]):
-        with open(args.keys[0], "r") as f:
+        with open(args.keys[0]) as f:
             keys = [line.strip() for line in f if line.strip()]
     else:
         keys = args.keys
@@ -101,7 +96,7 @@ def main():
     if not document_keys:
         sys.exit(1)
 
-    outputs: List[str] = []
+    outputs: list[str] = []
     for doc_key in document_keys:
         result = fetch_fields(jama, doc_key)
         if result:

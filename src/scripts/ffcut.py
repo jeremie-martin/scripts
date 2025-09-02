@@ -1,5 +1,11 @@
 from __future__ import annotations
-import argparse, re, subprocess, shutil, sys, os
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
 
 YTDLP = shutil.which("yt-dlp")
 FFMPEG = shutil.which("ffmpeg")
@@ -18,19 +24,27 @@ def download_youtube(url: str) -> str:
     cmd_name = [YTDLP, "--get-filename", "-o", "%(id)s.%(ext)s", "--no-playlist", url]
     name = subprocess.check_output(cmd_name, text=True).strip()
     # download (1080p or below)
-    cmd_dl = [YTDLP, "-q", "--no-warnings", "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]", "-o", f"{outdir}/%(id)s.%(ext)s", "--no-playlist", url]
+    cmd_dl = [
+        YTDLP,
+        "-q",
+        "--no-warnings",
+        "-f",
+        "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "-o",
+        f"{outdir}/%(id)s.%(ext)s",
+        "--no-playlist",
+        url,
+    ]
     subprocess.run(cmd_dl, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return os.path.join(outdir, name)
 
 
-def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int|None) -> list[str]:
+def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int | None) -> list[str]:
     args = [FFMPEG, "-y", "-ss", start, "-to", end, "-i", inp]
     ext = out.rsplit(".", 1)[-1].lower()
-    if ext in {"mp3","aac","wav","ogg","flac"}:
+    if ext in {"mp3", "aac", "wav", "ogg", "flac"}:
         args += ["-vn"]
-        codec = {
-            "mp3":"libmp3lame","aac":"aac","wav":"pcm_s16le","ogg":"libvorbis","flac":"flac"
-        }[ext]
+        codec = {"mp3": "libmp3lame", "aac": "aac", "wav": "pcm_s16le", "ogg": "libvorbis", "flac": "flac"}[ext]
         args += ["-c:a", codec]
     else:
         vf = ["format=yuv420p"]
@@ -38,15 +52,35 @@ def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int|Non
             scale = scale // 2 * 2  # even
             vf.insert(0, f"scale=-2:{scale}")
         args += [
-            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1", "-pix_fmt", "yuv420p",
-            "-crf", str(crf), "-c:a", "aac", "-ac", "2", "-movflags", "+faststart",
-            "-metadata", "major_brand=mp42", "-metadata", "compatible_brands=iso6avc1mp41",
-            "-strict", "experimental", "-vf", ",".join(vf)
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-level",
+            "3.1",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            str(crf),
+            "-c:a",
+            "aac",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            "-metadata",
+            "major_brand=mp42",
+            "-metadata",
+            "compatible_brands=iso6avc1mp41",
+            "-strict",
+            "experimental",
+            "-vf",
+            ",".join(vf),
         ]
-    return args + [out]
+    return [*args, out]
 
 
-def main(argv: list[str]|None=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     if not FFMPEG:
         print("ffcut requires ffmpeg on PATH (install via your OS)", file=sys.stderr)
         return 2
@@ -86,6 +120,7 @@ def main(argv: list[str]|None=None) -> int:
         return 1
     print("File processed:", a.output)
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
