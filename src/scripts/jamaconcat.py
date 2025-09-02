@@ -80,7 +80,8 @@ def fetch_item(document_key: str, fetch_version: bool = False) -> Optional[str]:
             latest = 1
         version_suffix = f"v{latest}"
 
-    url = f"{jama.host_domain}/perspective.req?projectId=55&docId={item_id}"
+    JAMA_URL = os.getenv("JAMA_URL", "").rstrip("/")
+    url = f"{JAMA_URL}/perspective.req?projectId=55&docId={item_id}"
 
     return (
         f"Document Key: {document_key}{version_suffix}\n"
