@@ -8,16 +8,14 @@ app = typer.Typer(help="Tiny ImageMagick helpers")
 def twi(file: Path):
     b = file.stem
     out = Path("twi") / f"{b}.jpg"
-    out.parent.mkdir(exist_ok=True)
-    subprocess.run(["convert", str(file), "-resize", "66.6666666%", "-quality", "92", str(out)], check=True)
+    subprocess.run(["convert", "-resize", "66.6666666%", str(file), "-quality", "92", str(out)], check=True)
     print(out)
 
 @app.command("2work")
 def work(file: Path):
     b = file.stem
     out = Path("../working") / f"{b}_small.jpg"
-    out.parent.mkdir(exist_ok=True)
-    subprocess.run(["convert", str(file), "-resize", "50%", "-quality", "90", str(out)], check=True)
+    subprocess.run(["convert", "-resize", "50%", str(file), "-quality", "90", str(out)], check=True)
     print(out)
 
 # expose as entry points named 2twi / 2work via wrapper functions

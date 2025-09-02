@@ -59,6 +59,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=30):
         except (TranscriptsDisabled, NoTranscriptFound):
             try:
                 transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                print(transcript_list)  # legacy debug line
                 first = next(iter(transcript_list), None)
                 if first:
                     transcript = first.fetch()

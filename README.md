@@ -20,7 +20,7 @@ Discrete commands (installed via entry points):
 
 ```bash
 concat …
-transcript …          # requires [media]
+transcript …          # requires [media] (default: 2 workers)
 ffcut …               # requires ffmpeg + yt-dlp on PATH
 gdiffpath …
 import-photos …
@@ -32,8 +32,8 @@ jamalinking …         # requires [jama]
 jamalinkingfull …     # requires [jama]
 jamanotest …          # requires [jama]
 jamatmp …             # requires [jama]
-2twi / img-twi …      # ImageMagick
-2work / img-work …    # ImageMagick
+2twi / img-twi …      # ImageMagick (writes to twi/, dir must pre-exist)
+2work / img-work …    # ImageMagick (writes to ../working/, dir must pre-exist)
 ```
 
 Umbrella wrapper (optional):
