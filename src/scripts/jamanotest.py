@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""
+jamanotest.py
+
+Checks downstream test coverage for Jama items and folders.
+For each provided Jama document or folder key, fetches the item(s), retrieves downstream relationships,
+filters for test links (document keys starting with "ABSD-SWVER-"), and reports coverage.
+
+Usage:
+    python jamanotest.py [--recursive] JAMA_KEY [JAMA_KEY ...]
+Options:
+    -r, --recursive   Recursively fetch items in subfolders for folder keys.
+"""
+import sys
+import os
+import argparse
+from typing import List, Set, Optional, Dict
+from py_jama_rest_client.client import JamaClient, APIException
+
+# Configuration
+JAMA_URL = os.getenv("JAMA_URL")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+
+if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
+    sys.exit("Error: Missing one or more required environment variables: JAMA_URL, CLIENT_ID, CLIENT_SECRET")
+
+jama = JamaClient(
+    host_domain=JAMA_URL,
+    oauth=True,
+    credentials=(CLIENT_ID, CLIENT_SECRET)
+)
+
+
+def get_item_id(doc_key: str) -> Optional[int]:
+    """Return Jama item ID for a given document key."""
+    try:
+        items = jama.get_abstract_items(contains=doc_key)
+        for itm in items:
+            if itm.get("documentKey") == doc_key:
+                return itm.get("id")
+    except APIException as e:
+        print(f"Error querying '{doc_key}': {e}", file=sys.stderr)
+    return None
+
+
+def collect_keys_from_folder(folder_id: int, recursive: bool=False, seen: Set[int]=None) -> List[str]:
+    """Collect document keys from a folder, optionally recursive."""
+    if seen is None:
+        seen = set()
+    keys: List[str] = []
+    try:
+        children = jama.get_item_children(folder_id)
+    except APIException as e:
+        print(f"Error fetching folder {folder_id}: {e}", file=sys.stderr)
+        return keys
+    for child in children:
+        cid = child.get("id")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        fields = child.get("fields", {})
+        dk = fields.get("documentKey")
+        if dk:
+            keys.append(dk)
+        elif recursive:
+            keys.extend(collect_keys_from_folder(cid, recursive, seen))
+    return keys
+
+
+def get_downstream_coverage(item_id: int) -> List[str]:
+    """Fetch downstream-relationship items and return those with test document keys."""
+    try:
+        rels = jama.get_items_downstream_relationships(item_id)
+    except APIException as e:
+        print(f"Error fetching downstream for {item_id}: {e}", file=sys.stderr)
+        return []
+    covered = []
+    for rel in rels:
+        to_id = rel.get("toItem")
+        # fetch the linked item to get its documentKey
+        try:
+            item = jama.get_item(to_id)
+            doc_key = item.get("documentKey") or item.get("fields", {}).get("documentKey")
+            if doc_key and doc_key.startswith("ABSD-SWVER-"):
+                covered.append(doc_key)
+        except APIException:
+            continue
+    return covered
+
+
+def check_coverage_for_key(doc_key: str) -> bool:
+    """Check and report coverage for a single document key."""
+    item_id = get_item_id(doc_key)
+    if not item_id:
+        print(f"Error: item '{doc_key}' not found.")
+        return False
+    coverage = get_downstream_coverage(item_id)
+    print(f"\nDocument Key: {doc_key}")
+    if coverage:
+        print("Covered by tests:")
+        for ck in coverage:
+            print(f"  - {ck}")
+        return True
+    else:
+        print("No downstream test items found!")
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Check test coverage for Jama items by downstream links.")
+    parser.add_argument("-r", "--recursive", action="store_true",
+                        help="Recursively expand folder keys.")
+    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY",
+                        help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD-XYZ)")
+    args = parser.parse_args()
+
+    all_keys: List[str] = []
+    for key in args.keys:
+        if "FLD" in key.upper():
+            fid = get_item_id(key)
+            if fid:
+                found = collect_keys_from_folder(fid, recursive=args.recursive)
+                if not found:
+                    print(f"No items in folder '{key}'")
+                else:
+                    all_keys.extend(found)
+            else:
+                print(f"Error: folder '{key}' not found.")
+        else:
+            all_keys.append(key)
+
+    if not all_keys:
+        sys.exit(1)
+
+    total = len(all_keys)
+    covered_count = 0
+    print("\n=== Test Coverage Report ===")
+    for k in all_keys:
+        if check_coverage_for_key(k):
+            covered_count += 1
+
+    print("\n=== Summary ===")
+    print(f"Total items checked: {total}")
+    print(f"Items covered by tests: {covered_count}")
+    print(f"Items missing coverage: {total - covered_count}")
+
+if __name__ == "__main__":
+    main()
+

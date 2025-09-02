@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+import sys
+import json
+import os
+import argparse
+from typing import Optional, List, Set
+from py_jama_rest_client.client import JamaClient
+
+# Environment variables
+JAMA_URL = os.getenv("JAMA_URL")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+
+if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
+    sys.exit(
+        f"Error: Missing one or more required environment variables: "
+        f"JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
+    )
+
+# Initialize JAMA client
+jama = JamaClient(
+    host_domain=JAMA_URL,
+    oauth=True,
+    credentials=(CLIENT_ID, CLIENT_SECRET)
+)
+
+
+def get_item_id(document_key: str) -> Optional[int]:
+    """
+    Get Jama internal item ID from a document key.
+    """
+    items = jama.get_abstract_items(contains=document_key)
+    for item in items:
+        if item.get("documentKey") == document_key:
+            return item.get("id")
+    return None
+
+
+def collect_keys_from_folder(
+    folder_id: int,
+    recursive: bool = False,
+    seen: Set[int] = None
+) -> List[str]:
+    """
+    Fetch all document keys from items in the given Jama folder.
+    If recursive=True, traverse subfolders as well.
+    """
+    if seen is None:
+        seen = set()
+    keys: List[str] = []
+
+    try:
+        children = jama.get_item_children(folder_id)
+    except Exception as e:
+        print(f"Error fetching children for folder {folder_id}: {e}", file=sys.stderr)
+        return keys
+
+    for child in children:
+        cid = child.get("id")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        fields = child.get("fields", {})
+        doc_key = fields.get("documentKey")
+        # If it has a document key, add it
+        if doc_key:
+            keys.append(doc_key)
+        # Otherwise, assume it's a folder and recurse if requested
+        elif recursive:
+            keys.extend(collect_keys_from_folder(cid, recursive, seen))
+
+    return keys
+
+
+def update_test_fields(jama_client, doc_id: str):
+    """
+    Updates empty test fields with default values for a given document key.
+    """
+    try:
+        # Find the item ID by document key
+        item_id = get_item_id(doc_id)
+        if not item_id:
+            print(f"Error: Could not find item with document key '{doc_id}'", file=sys.stderr)
+            return
+
+        # Retrieve current fields
+        item = jama_client.get_item(item_id)
+        fields = item.get("fields", {})
+
+        # Default field values
+        field_mappings = {
+            "initial_conditions": "N/A",
+            "test_inputs": "N/A",
+            "data_collection_actions": "Operator saves the intermediate report.",
+            "assumptions__constraints": "N/A",
+            "test_outputs": (
+                "Test result intermediate report containing the date and time the test was run "
+                "along with the test result."
+            ),
+        }
+
+        updates = []
+        existing_keys = set()
+
+        # Check and prepare updates for existing fields
+        for original_key in fields.keys():
+            # Normalize name by trimming suffix after '$'
+            key_base = original_key.split("$")[0]
+            if key_base in field_mappings:
+                existing_keys.add(key_base)
+                if not fields.get(original_key):
+                    updates.append({
+                        "op": "add",
+                        "path": f"/fields/{key_base}",
+                        "value": field_mappings[key_base],
+                    })
+
+        # Add any missing mapped fields not already in the item
+        missing = set(field_mappings.keys()) - existing_keys
+        for key in missing:
+            updates.append({
+                "op": "add",
+                "path": f"/fields/{key}",
+                "value": field_mappings[key],
+            })
+
+        # Apply updates if any
+        if updates:
+            print(f"\nApplying updates to {doc_id}:", json.dumps(updates, indent=2))
+            jama_client.patch_item(item_id, updates)
+            print(f"Successfully updated empty fields for {doc_id}")
+        else:
+            print(f"No empty fields to update for {doc_id}")
+
+    except Exception as e:
+        print(f"Error updating {doc_id}: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Update empty test fields for Jama items by document key or all items in a folder."
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Recursively fetch items in subfolders for folder keys."
+    )
+    parser.add_argument(
+        "ids", nargs="*",
+        help="One or more Jama document keys or folder keys containing 'FLD'."
+    )
+    args = parser.parse_args()
+
+    # Gather IDs from args or stdin
+    input_ids = []
+    if args.ids:
+        input_ids = args.ids
+    elif not sys.stdin.isatty():
+        input_ids = [line.strip() for line in sys.stdin if line.strip()]
+
+    if not input_ids:
+        parser.print_usage()
+        sys.exit(1)
+
+    # Resolve folder keys into document keys
+    document_keys: List[str] = []
+    for key in input_ids:
+        if "FLD" in key.upper():
+            folder_id = get_item_id(key)
+            if not folder_id:
+                print(f"Error: Could not find folder with document key '{key}'", file=sys.stderr)
+                continue
+            found = collect_keys_from_folder(folder_id, recursive=args.recursive)
+            if not found:
+                print(f"No items found in folder '{key}'.", file=sys.stderr)
+            else:
+                document_keys.extend(found)
+        else:
+            document_keys.append(key)
+
+    if not document_keys:
+        sys.exit(1)
+
+    print("\nAttempting updates...")
+    for doc_id in document_keys:
+        update_test_fields(jama, doc_id)
+
+
+if __name__ == "__main__":
+    main()
+

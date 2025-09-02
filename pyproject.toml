@@ -1,0 +1,30 @@
+[project]
+name = "scripts"
+version = "0.1.0"
+description = "A collection of utility scripts for development and automation"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "beautifulsoup4>=4.13.5",
+    "py-jama-rest-client>=1.17.1",
+    "pyperclip>=1.9.0",
+    "python-dotenv>=1.1.1",
+    "youtube-transcript-api>=1.2.2",
+    "yt-dlp>=2025.8.27",
+]
+
+[project.scripts]
+concat = "scripts.concat:main"
+transcript = "scripts.transcript:main"
+jamaclean = "scripts.jamaclean:main"
+jamaconcat = "scripts.jamaconcat:main"
+jamaconcatfull = "scripts.jamaconcatfull:main"
+jamafilltests = "scripts.jamafilltests:main"
+jamalinking = "scripts.jamalinking:main"
+jamalinkingfull = "scripts.jamalinkingfull:main"
+jamanotest = "scripts.jamanotest:main"
+jamatmp = "scripts.jamatmp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
