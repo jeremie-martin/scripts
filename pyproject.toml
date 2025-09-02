@@ -13,15 +13,13 @@ dependencies = [
 
 [project.optional-dependencies]
 # Keep base install light; opt into features as needed
-jama = [
-  "py-jama-rest-client>=1.17.1",
-  "beautifulsoup4>=4.12.3",
-]
+jama = ["py-jama-rest-client>=1.17.1", "beautifulsoup4>=4.12.3"]
 media = [
   "youtube-transcript-api>=1.2.2",
   # keep flexible, yt-dlp updates frequently
   "yt-dlp>=2024.10.0",
 ]
+dev = ["ruff>=0.12.9"]
 
 [project.scripts]
 # keep direct commands for muscle memory
