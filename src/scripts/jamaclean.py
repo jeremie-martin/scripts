@@ -12,13 +12,11 @@ Options:
     -r, --recursive   Recursively fetch items in subfolders for folder keys.
 """
 import sys
-import os
 import argparse
-from typing import Optional, List, Set
+from typing import Optional, List
 from py_jama_rest_client.client import JamaClient
 from bs4 import BeautifulSoup
-
-# ———————————————— Configuration ————————————————
+from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
 
 # ———————————————— HTML Cleaning ————————————————
 def clean_html(html: str) -> str:
@@ -29,14 +27,6 @@ def clean_html(html: str) -> str:
     for span in soup.find_all('span'):
         span.unwrap()
     return str(soup).replace('\xa0', '&nbsp;')
-
-# ———————————————— Jama Helpers ————————————————
-def get_item_id(jama_client, doc_key: str) -> Optional[int]:
-    items = jama_client.get_abstract_items(contains=doc_key)
-    for itm in items:
-        if itm.get("documentKey") == doc_key:
-            return itm.get("id")
-    return None
 
 
 def find_field_key(fields: dict, prefix: str) -> Optional[str]:
@@ -96,34 +86,6 @@ def fetch_and_update_item(jama_client, doc_key: str) -> Optional[str]:
     return "\n".join(output) + "\n"
 
 
-def collect_keys_from_folder(
-    jama_client,
-    folder_id: int,
-    recursive: bool = False,
-    seen: Set[int]  = None
-) -> List[str]:
-    if seen is None:
-        seen = set()
-    keys: List[str] = []
-    try:
-        children = jama_client.get_item_children(folder_id)
-    except Exception as e:
-        print(f"Error fetching folder {folder_id}: {e}", file=sys.stderr)
-        return keys
-
-    for child in children:
-        cid = child.get("id")
-        if not cid or cid in seen:
-            continue
-        seen.add(cid)
-        flds = child.get("fields", {})
-        dk = flds.get("documentKey")
-        if dk:
-            keys.append(dk)
-        elif recursive:
-            keys += collect_keys_from_folder(jama_client, cid, recursive, seen)
-    return keys
-
 # ———————————————— CLI Entrypoint ————————————————
 def main():
     parser = argparse.ArgumentParser(description="Fetch, clean, and update Jama HTML descriptions.")
@@ -133,19 +95,11 @@ def main():
                         help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD...).")
     args = parser.parse_args()
 
-    # Load configuration after parsing arguments (so --help works)
-    JAMA_URL      = os.getenv("JAMA_URL")
-    CLIENT_ID     = os.getenv("CLIENT_ID")
-    CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-    if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
-        sys.exit("Error: Missing one or more required environment variables: JAMA_URL, CLIENT_ID, CLIENT_SECRET")
-
-    # Initialize Jama client
-    jama = JamaClient(
-        host_domain=JAMA_URL,
-        oauth=True,
-        credentials=(CLIENT_ID, CLIENT_SECRET)
-    )
+    # Load Jama client using shared helper
+    try:
+        jama = load_jama()
+    except Exception as e:
+        sys.exit(f"Error: {e}")
 
     doc_keys: List[str] = []
     for key in args.keys:

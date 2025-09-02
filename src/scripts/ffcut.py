@@ -1,0 +1,70 @@
+from __future__ import annotations
+import argparse, re, subprocess, shutil, sys, os
+
+YTDLP = shutil.which("yt-dlp")
+FFMPEG = shutil.which("ffmpeg")
+
+YT_RE = re.compile(r"^(https?://.*(?:youtube\.com|youtu\.be)/.*)$", re.I)
+
+
+def is_youtube(s: str) -> bool:
+    return bool(YT_RE.match(s))
+
+
+def download_youtube(url: str) -> str:
+    outdir = os.path.join(os.path.expanduser("~"), "ytmp")
+    os.makedirs(outdir, exist_ok=True)
+    # get final file name
+    cmd_name = [YTDLP, "--get-filename", "-o", "%(id)s.%(ext)s", "--no-playlist", url]
+    name = subprocess.check_output(cmd_name, text=True).strip()
+    # download (1080p or below)
+    cmd_dl = [YTDLP, "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]", "-o", f"{outdir}/%(id)s.%(ext)s", "--no-playlist", url]
+    subprocess.run(cmd_dl, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return os.path.join(outdir, name)
+
+
+def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int|None) -> list[str]:
+    args = [FFMPEG, "-ss", start, "-to", end, "-i", inp]
+    ext = out.rsplit(".", 1)[-1].lower()
+    if ext in {"mp3","aac","wav","ogg","flac"}:
+        args += ["-vn"]
+        codec = {
+            "mp3":"libmp3lame","aac":"aac","wav":"pcm_s16le","ogg":"libvorbis","flac":"flac"
+        }[ext]
+        args += ["-c:a", codec]
+    else:
+        vf = ["format=yuv420p"]
+        if scale:
+            scale = scale // 2 * 2  # even
+            vf.insert(0, f"scale=-2:{scale}")
+        args += [
+            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.1", "-pix_fmt", "yuv420p",
+            "-crf", str(crf), "-c:a", "aac", "-ac", "2", "-movflags", "+faststart",
+            "-metadata", "major_brand=mp42", "-metadata", "compatible_brands=iso6avc1mp41",
+            "-strict", "experimental", "-vf", ",".join(vf)
+        ]
+    return args + [out]
+
+
+def main(argv: list[str]|None=None) -> int:
+    if not YTDLP or not FFMPEG:
+        print("ffcut requires yt-dlp and ffmpeg on PATH", file=sys.stderr)
+        return 2
+    p = argparse.ArgumentParser(description="Cut a time range from a file or YouTube URL (Twitter-ready MP4).")
+    p.add_argument("input")
+    p.add_argument("start")
+    p.add_argument("end")
+    p.add_argument("output")
+    p.add_argument("-crf", type=int, default=22)
+    p.add_argument("-scale", type=int, default=None)
+    a = p.parse_args(argv)
+
+    inp = download_youtube(a.input) if is_youtube(a.input) else a.input
+    cmd = build_cmd(inp, a.start, a.end, a.output, a.crf, a.scale)
+    print("running:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+    print("File processed:", a.output)
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

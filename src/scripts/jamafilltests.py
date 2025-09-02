@@ -1,75 +1,16 @@
 #!/usr/bin/env python3
 import sys
 import json
-import os
 import argparse
 from typing import Optional, List, Set
-from py_jama_rest_client.client import JamaClient
-
-# Environment variables
-JAMA_URL = os.getenv("JAMA_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-
-if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
-    sys.exit(
-        f"Error: Missing one or more required environment variables: "
-        f"JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
-    )
+from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
 
 # Initialize JAMA client
-jama = JamaClient(
-    host_domain=JAMA_URL,
-    oauth=True,
-    credentials=(CLIENT_ID, CLIENT_SECRET)
-)
+try:
+    jama = load_jama()
+except Exception as e:
+    sys.exit(f"Error: {e}")
 
-
-def get_item_id(document_key: str) -> Optional[int]:
-    """
-    Get Jama internal item ID from a document key.
-    """
-    items = jama.get_abstract_items(contains=document_key)
-    for item in items:
-        if item.get("documentKey") == document_key:
-            return item.get("id")
-    return None
-
-
-def collect_keys_from_folder(
-    folder_id: int,
-    recursive: bool = False,
-    seen: Set[int] = None
-) -> List[str]:
-    """
-    Fetch all document keys from items in the given Jama folder.
-    If recursive=True, traverse subfolders as well.
-    """
-    if seen is None:
-        seen = set()
-    keys: List[str] = []
-
-    try:
-        children = jama.get_item_children(folder_id)
-    except Exception as e:
-        print(f"Error fetching children for folder {folder_id}: {e}", file=sys.stderr)
-        return keys
-
-    for child in children:
-        cid = child.get("id")
-        if not cid or cid in seen:
-            continue
-        seen.add(cid)
-        fields = child.get("fields", {})
-        doc_key = fields.get("documentKey")
-        # If it has a document key, add it
-        if doc_key:
-            keys.append(doc_key)
-        # Otherwise, assume it's a folder and recurse if requested
-        elif recursive:
-            keys.extend(collect_keys_from_folder(cid, recursive, seen))
-
-    return keys
 
 
 def update_test_fields(jama_client, doc_id: str):
@@ -170,7 +111,7 @@ def main():
             if not folder_id:
                 print(f"Error: Could not find folder with document key '{key}'", file=sys.stderr)
                 continue
-            found = collect_keys_from_folder(folder_id, recursive=args.recursive)
+            found = collect_keys_from_folder(jama, folder_id, recursive=args.recursive)
             if not found:
                 print(f"No items found in folder '{key}'.", file=sys.stderr)
             else:

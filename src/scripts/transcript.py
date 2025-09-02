@@ -125,7 +125,7 @@ def main():
         "--workers",
         type=int,
         default=2,
-        help="Number of worker threads (default: 5).",
+        help="Number of worker threads (default: 2).",
     )
     parser.add_argument(
         "urls", nargs="*", help="YouTube video URLs (if empty, reads from stdin)."

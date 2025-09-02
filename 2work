@@ -1,4 +1,0 @@
-#!/bin/bash
-
-b="${1%.*}"
-convert -resize 50% $1 -quality 90 "../working/${b}_small.jpg"

@@ -1,4 +1,4 @@
-#!/home/jmartin/.local/bin/.venv/bin/python
+#!/usr/bin/env python3
 
 """
 Jama Auto Linker Script
@@ -8,20 +8,10 @@ based on the comprehensive mapping analysis.
 
 import sys
 import json
-import time
 from typing import Dict, List, Optional, Tuple
 from py_jama_rest_client.client import JamaClient
 from py_jama_rest_client.client import APIException
-from dotenv import load_dotenv
-import os
-
-# Load environment variables
-load_dotenv()
-
-# Jama connection settings
-JAMA_URL = os.getenv("JAMA_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+from scripts.jama.common import load_jama, rate_limit
 
 # Interface ID to Document Key mapping
 INTERFACE_ID_TO_DOCUMENT_KEY = {
@@ -378,9 +368,7 @@ SRS_TO_INTERFACE_MAPPING = {
 class JamaAutoLinker:
     def __init__(self):
         """Initialize the Jama Auto Linker with API connection."""
-        self.jama = JamaClient(
-            host_domain=JAMA_URL, oauth=True, credentials=(CLIENT_ID, CLIENT_SECRET)
-        )
+        self.jama = load_jama()
         self.item_cache = {}  # Cache for item ID lookups
         self.failed_lookups = set()  # Track failed lookups to avoid retries
         self.stats = {
@@ -524,7 +512,7 @@ class JamaAutoLinker:
             )
 
             # Add small delay to avoid rate limiting
-            time.sleep(0.1)
+            rate_limit(0.1)
 
     def run_auto_linking(self, dry_run: bool = False) -> None:
         """Run the automatic linking process."""
@@ -580,7 +568,7 @@ class JamaAutoLinker:
             self.process_srs_requirement(srs_key, interface_keys)
 
             # Add delay between SRS requirements to be respectful to the API
-            time.sleep(0.5)
+            rate_limit(0.5)
 
         # Print final statistics
         self.print_final_stats()

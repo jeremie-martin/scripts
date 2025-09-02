@@ -6,19 +6,9 @@ based on comprehensive mapping analysis.
 """
 
 import sys
-import time
 from typing import List, Optional
-from py_jama_rest_client.client import JamaClient, APIException
-from dotenv import load_dotenv
-import os
-
-# Load environment variables
-load_dotenv()
-
-# Jama connection settings
-JAMA_URL = os.getenv("JAMA_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+from py_jama_rest_client.client import APIException
+from scripts.jama.common import load_jama, get_item_id, rate_limit
 
 # SUT Requirements to Unit Tests mapping based on analysis
 SUT_REQUIREMENTS_TO_TESTS_MAPPING = {
@@ -213,10 +203,7 @@ SUT_REQUIREMENTS_TO_TESTS_MAPPING = {
 class JamaAutoLinker:
     def __init__(self):
         """Initialize the Jama Auto Linker with API connection."""
-        self.jama = JamaClient(
-            host_domain=JAMA_URL, oauth=True,
-            credentials=(CLIENT_ID, CLIENT_SECRET)
-        )
+        self.jama = load_jama()
         self.item_cache = {}
         self.failed_lookups = set()
         self.stats = {
@@ -231,23 +218,7 @@ class JamaAutoLinker:
             "requirements_no_tests": 0,
         }
 
-    def get_item_id(self, document_key: str) -> Optional[int]:
-        """Get Jama internal item ID from a document key with caching."""
-        if document_key in self.item_cache:
-            return self.item_cache[document_key]
-        if document_key in self.failed_lookups:
-            return None
-        try:
-            items = self.jama.get_abstract_items(contains=document_key)
-            for item in items:
-                if item.get("documentKey") == document_key:
-                    item_id = item.get("id")
-                    self.item_cache[document_key] = item_id
-                    return item_id
-        except Exception as e:
-            print(f"Error looking up '{document_key}': {e}")
-        self.failed_lookups.add(document_key)
-        return None
+
 
     def relationship_exists(self, from_item_id: int, to_item_id: int) -> bool:
         """Check if a relationship already exists between two items."""
@@ -287,14 +258,14 @@ class JamaAutoLinker:
     def process_requirement(self, req_key: str, test_keys: List[str]) -> None:
         """Process a single requirement and its test mappings."""
         print(f"\nProcessing SUT Requirement: {req_key}")
-        req_item_id = self.get_item_id(req_key)
+        req_item_id = get_item_id(self.jama, req_key)
         if not req_item_id:
             print(f"  ✗ Requirement not found: {req_key}")
             self.stats["requirements_not_found"] += 1
             return
         print(f"  Found requirement item ID: {req_item_id}")
         for test_id in test_keys:
-            test_item_id = self.get_item_id(test_id)
+            test_item_id = get_item_id(self.jama, test_id)
             if not test_item_id:
                 print(f"  ✗ Test not found: {test_id}")
                 self.stats["tests_not_found"] += 1
@@ -302,7 +273,7 @@ class JamaAutoLinker:
             self.create_relationship(
                 req_item_id, test_item_id, req_key, test_id
             )
-            time.sleep(0.1)
+            rate_limit(0.1)
 
     def run_auto_linking(self, dry_run: bool = False) -> None:
         """Run the automatic linking process."""
@@ -337,7 +308,7 @@ class JamaAutoLinker:
                 self.stats["requirements_no_tests"] += 1
                 continue
             self.process_requirement(req_key, test_keys)
-            time.sleep(0.5)
+            rate_limit(0.5)
         self.print_final_stats()
 
     def print_final_stats(self) -> None:

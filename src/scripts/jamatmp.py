@@ -4,28 +4,10 @@ Script to find all upstream-linked Jama items for a source key and link them
 to a target item key. Supports dry-run mode.
 """
 
-import os
-import time
 import argparse
-from dotenv import load_dotenv
-from py_jama_rest_client.client import JamaClient, APIException, AlreadyExistsException
+from py_jama_rest_client.client import APIException, AlreadyExistsException
+from scripts.jama.common import load_jama, get_item_id, rate_limit
 
-# Load environment variables from .env in the same directory
-load_dotenv()
-
-JAMA_URL = os.getenv("JAMA_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
-    raise SystemExit("Error: JAMA_URL, CLIENT_ID and CLIENT_SECRET must be set in your environment")
-
-def get_item_id(jama: JamaClient, document_key: str):
-    """Return the Jama item ID for the given document key, or None if not found."""
-    items = jama.get_abstract_items(contains=document_key)
-    for itm in items:
-        if itm.get("documentKey") == document_key:
-            return itm["id"]
-    return None
 
 def get_upstream_items(jama: JamaClient, item_id: int):
     """Return a list of dicts for items that link upstream to the given item."""
@@ -65,7 +47,7 @@ def link_upstream_to_target(jama: JamaClient, source_key: str, target_key: str, 
             except APIException as e:
                 print(f"    ✗ Failed to create relationship: {action}: {e}")
             # Be polite to the API
-            time.sleep(0.1)
+            rate_limit(0.1)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -79,11 +61,10 @@ def main():
     args = parser.parse_args()
 
     # Initialize client
-    jama = JamaClient(
-        host_domain=JAMA_URL,
-        oauth=True,
-        credentials=(CLIENT_ID, CLIENT_SECRET)
-    )
+    try:
+        jama = load_jama()
+    except Exception as e:
+        raise SystemExit(f"Error: {e}")
 
     # Define your mappings here
     mappings = [

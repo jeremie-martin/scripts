@@ -7,60 +7,10 @@ Handles both individual items and folders (with optional recursive traversal).
 
 import sys
 import argparse
-import os
 from typing import Optional, List, Set
-from py_jama_rest_client.client import JamaClient
 import pyperclip
+from scripts.jama.common import load_jama, get_item_id, collect_keys_from_folder
 
-# Environment variables will be loaded in main()
-
-
-def get_item_id(jama_client, document_key: str) -> Optional[int]:
-    """
-    Get Jama internal item ID from a document key.
-    """
-    try:
-        items = jama_client.get_abstract_items(contains=document_key)
-        for item in items:
-            if item.get("documentKey") == document_key:
-                return item.get("id")
-    except Exception as e:
-        print(f"Error searching for item '{document_key}': {e}", file=sys.stderr)
-    return None
-
-
-def collect_keys_from_folder(
-    jama_client, folder_id: int, recursive: bool = False, seen: Set[int] = None
-) -> List[str]:
-    """
-    Fetch all document keys from items in the given Jama folder.
-    If recursive=True, traverse subfolders as well.
-    """
-    if seen is None:
-        seen = set()
-    keys: List[str] = []
-
-    try:
-        children = jama_client.get_item_children(folder_id)
-    except Exception as e:
-        print(f"Error fetching children for folder {folder_id}: {e}", file=sys.stderr)
-        return keys
-
-    for child in children:
-        cid = child.get("id")
-        if not cid or cid in seen:
-            continue
-        seen.add(cid)
-        fields = child.get("fields", {})
-        doc_key = fields.get("documentKey")
-        # If it has a document key, add it
-        if doc_key:
-            keys.append(doc_key)
-        # Otherwise, assume it's a folder and recurse if requested
-        elif recursive:
-            keys.extend(collect_keys_from_folder(jama_client, cid, recursive, seen))
-
-    return keys
 
 
 def fetch_fields(jama_client, document_key: str) -> Optional[str]:
@@ -115,19 +65,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Load configuration after parsing arguments (so --help works)
-    JAMA_URL = os.getenv("JAMA_URL")
-    CLIENT_ID = os.getenv("CLIENT_ID")
-    CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-    if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
-        sys.exit(
-            f"Error: Missing one or more required environment variables: JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
-        )
-
-    # Initialize JAMA client
-    jama = JamaClient(
-        host_domain=JAMA_URL, oauth=True, credentials=(CLIENT_ID, CLIENT_SECRET)
-    )
+    # Initialize JAMA client using shared helper
+    try:
+        jama = load_jama()
+    except Exception as e:
+        sys.exit(f"Error: {e}")
 
     # Collect document keys, expanding folders if requested
     document_keys: List[str] = []
