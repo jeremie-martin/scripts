@@ -10,7 +10,13 @@ import sys
 
 from py_jama_rest_client.client import APIException
 
-from scripts.jama.common import load_jama, rate_limit
+from scripts.jama.common import (
+    get_item_id,
+    load_jama,
+    rate_limit,
+    relationship_exists,
+    with_retries,
+)
 
 # Interface ID to Document Key mapping
 INTERFACE_ID_TO_DOCUMENT_KEY = {
@@ -381,64 +387,22 @@ class JamaAutoLinker:
             "interface_not_found": 0,
         }
 
-    def get_item_id(self, document_key: str) -> int | None:
-        """Get Jama internal item ID from a document key with caching."""
-        if document_key in self.item_cache:
-            return self.item_cache[document_key]
-
-        if document_key in self.failed_lookups:
-            return None
-
-        try:
-            items = self.jama.get_abstract_items(contains=document_key)
-            for item in items:
-                if item.get("documentKey") == document_key:
-                    item_id = item.get("id")
-                    self.item_cache[document_key] = item_id
-                    return item_id
-        except APIException as e:
-            print(f"API error looking up '{document_key}': {e}")
-        except Exception as e:
-            print(f"Unexpected error looking up '{document_key}': {e}")
-
-        self.failed_lookups.add(document_key)
-        return None
-
-    def relationship_exists(self, from_item_id: int, to_item_id: int) -> bool:
-        """Check if a relationship already exists between two items."""
-        try:
-            # Get downstream relationships from the source item
-            downstream_rels = self.jama.get_items_downstream_relationships(from_item_id)
-
-            # Check if target item is already linked
-            for rel in downstream_rels:
-                if rel.get("toItem") == to_item_id:
-                    return True
-
-            # Also check upstream relationships from the target item
-            upstream_rels = self.jama.get_items_upstream_relationships(to_item_id)
-            for rel in upstream_rels:
-                if rel.get("fromItem") == from_item_id:
-                    return True
-
-        except APIException as e:
-            print(f"Warning: Could not check existing relationships: {e}")
-        except Exception as e:
-            print(f"Warning: Unexpected error checking relationships: {e}")
-
-        return False
+    
 
     def create_relationship(self, from_item_id: int, to_item_id: int, from_key: str, to_key: str) -> bool:
         """Create a relationship between two items."""
         try:
             # Check if relationship already exists
-            if self.relationship_exists(from_item_id, to_item_id):
+            if relationship_exists(self.jama, from_item_id, to_item_id):
                 print(f"  → Relationship already exists: {from_key} ↔ {to_key}")
                 self.stats["skipped_links"] += 1
                 return True
 
             # Create the relationship
-            relationship_id = self.jama.post_relationship(from_item=from_item_id, to_item=to_item_id)
+            def _post():
+                return self.jama.post_relationship(from_item=from_item_id, to_item=to_item_id)
+
+            relationship_id = with_retries(_post)
 
             if relationship_id:
                 print(f"  ✓ Created relationship: {from_key} → {to_key} (ID: {relationship_id})")
@@ -468,7 +432,7 @@ class JamaAutoLinker:
         print(f"\nProcessing SRS: {srs_key}")
 
         # Get SRS item ID
-        srs_item_id = self.get_item_id(srs_key)
+        srs_item_id = get_item_id(self.jama, srs_key)
         if not srs_item_id:
             print(f"  ✗ SRS item not found: {srs_key}")
             self.stats["srs_not_found"] += 1
@@ -486,7 +450,7 @@ class JamaAutoLinker:
                 continue
 
             # Get interface item ID using document key
-            interface_item_id = self.get_item_id(interface_doc_key)
+            interface_item_id = get_item_id(self.jama, interface_doc_key)
             if not interface_item_id:
                 print(f"  ✗ Interface item not found: {interface_id} ({interface_doc_key})")
                 self.stats["interface_not_found"] += 1
@@ -516,7 +480,7 @@ class JamaAutoLinker:
         # Validate interface mappings
         print("Validating interface mappings...")
         missing_mappings = []
-        for srs_key, interface_ids in SRS_TO_INTERFACE_MAPPING.items():
+        for _srs_key, interface_ids in SRS_TO_INTERFACE_MAPPING.items():
             for interface_id in interface_ids:
                 if interface_id not in INTERFACE_ID_TO_DOCUMENT_KEY:
                     missing_mappings.append(interface_id)

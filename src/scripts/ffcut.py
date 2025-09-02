@@ -114,7 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     if not a.quiet:
         print("running:", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True)
+        run_kwargs = {} if not a.quiet else {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        subprocess.run(cmd, check=True, **run_kwargs)
     except subprocess.CalledProcessError as e:
         print(f"ffmpeg failed: {e}", file=sys.stderr)
         return 1

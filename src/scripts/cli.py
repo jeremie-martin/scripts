@@ -42,7 +42,14 @@ def run(ctx: typer.Context, cmd: str):
     """Run a discrete command with its own flags: `scripts run concat -- <args>`"""
     # prefer executing the installed entry point by name (so help/exit codes match)
     args = [cmd, *ctx.args]
-    code = subprocess.call(args)
+    try:
+        code = subprocess.call(args)
+    except FileNotFoundError:
+        typer.echo(
+            f"Command '{cmd}' not found. If it's provided by an optional extra, did you run 'uv sync --extra <name>'?",
+            err=True,
+        )
+        raise typer.Exit(127) from None
     raise typer.Exit(code)
 
 
@@ -52,7 +59,14 @@ app.add_typer(jama, name="jama")
 
 
 def _forward(cmd: str, rest: list[str]) -> int:
-    return subprocess.call([cmd, *rest])
+    try:
+        return subprocess.call([cmd, *rest])
+    except FileNotFoundError:
+        print(
+            f"Command '{cmd}' not found. If it's provided by an optional extra, did you run 'uv sync --extra <name>'?",
+            flush=True,
+        )
+        return 127
 
 
 @jama.command("clean", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})

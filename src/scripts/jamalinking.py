@@ -358,14 +358,10 @@ class JamaAutoLinker:
             "requirements_no_tests": 0,
         }
 
-    def relationship_exists(self, from_item_id: int, to_item_id: int) -> bool:
-        """Deprecated: use common.relationship_exists; kept for compatibility."""
-        return relationship_exists(self.jama, from_item_id, to_item_id)
-
     def create_relationship(self, from_item_id: int, to_item_id: int, from_key: str, to_key: str) -> bool:
         """Create a relationship between two items."""
         try:
-            if self.relationship_exists(from_item_id, to_item_id):
+            if relationship_exists(self.jama, from_item_id, to_item_id):
                 print(f"  → Relationship already exists: {from_key} ↔ {to_key}")
                 self.stats["skipped_links"] += 1
                 return True

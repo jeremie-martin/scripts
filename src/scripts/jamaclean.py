@@ -17,7 +17,13 @@ import sys
 
 from bs4 import BeautifulSoup
 
-from scripts.jama.common import collect_keys_from_folder, get_item_id, load_jama
+from scripts.jama.common import (
+    collect_keys_from_folder,
+    find_field_key,
+    get_item_id,
+    load_jama,
+    with_retries,
+)
 
 
 # ———————————————— HTML Cleaning ————————————————
@@ -30,12 +36,6 @@ def clean_html(html: str) -> str:
         span.unwrap()
     return str(soup).replace("\xa0", "&nbsp;")
 
-
-def find_field_key(fields: dict, prefix: str) -> str | None:
-    for key in fields:
-        if key.lower().startswith(prefix.lower()):
-            return key
-    return None
 
 
 def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
@@ -67,7 +67,7 @@ def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
         print(f"Updating description for {doc_key}...")
         patch = [{"op": "replace", "path": f"/fields/{desc_key}", "value": cleaned_html}]
         try:
-            jama_client.patch_item(item_id, patch)
+            with_retries(lambda: jama_client.patch_item(item_id, patch))
             print(f"Successfully updated description for {doc_key}")
         except Exception as e:
             print(f"Failed to update description for {doc_key}: {e}", file=sys.stderr)

@@ -36,7 +36,7 @@ def gdiffpath(staged: bool = False, target: str = ""):
                 print(f)
     except subprocess.CalledProcessError as e:
         print(e, file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None
 
 
 def main():

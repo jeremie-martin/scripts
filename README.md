@@ -1,5 +1,7 @@
 ## Scripts — utility CLIs (modern Python package)
 
+Requires Python 3.12+ (uv will manage a matching runtime).
+
 ### Install (uv-native)
 ```bash
 # Base
@@ -31,6 +33,7 @@ uv run jamalinkingfull … # needs --extra jama
 uv run jamanotest …     # needs --extra jama
 uv run jamatmp …        # needs --extra jama
 # Linkers default to DRY RUN; pass --apply to execute
+# jamaconcat*, transcript copy to clipboard by default; use -t/--terminal to print
 uv run 2twi …           # ImageMagick (writes to twi/, dir must pre-exist)
 uv run img-twi …        # ImageMagick (writes to twi/, dir must pre-exist)
 uv run 2work …          # ImageMagick (writes to ../working/, dir must pre-exist)
@@ -44,6 +47,7 @@ Umbrella wrapper (optional):
 uv run scripts list
 uv run scripts run concat -- <args>
 uv run scripts jama clean -- ABSD-SWVER-123
+uv run scripts version    # quick sanity check the install
 ```
 
 ### Environment
@@ -56,12 +60,19 @@ CLIENT_SECRET=…
 
 > Note: No `setup_scripts.sh` needed — entry points handle global shims.
 
+Security note for `concat`: by default, common secret files (e.g. .env, keys, certs) are excluded. Use `--no-default-excludes` to include them.
+
 ### (Optional) Non-uv environments
 Generate a `requirements.txt` from the lock for environments still on pip:
 ```bash
 uv export --format requirements-txt -o requirements.txt   # from uv.lock
 ```
 Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
+
+### Platform notes
+
+- ffcut: `--quiet` suppresses ffmpeg/yt-dlp output.
+- import-photos: `--symlinks` on Windows may require Developer Mode or admin privileges for symlink creation.
 
 ### Deploy to another machine (no GitHub access on target)
 

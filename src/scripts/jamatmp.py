@@ -33,7 +33,7 @@ def link_upstream_to_target(jama, source_key: str, target_key: str, dry_run: boo
 
     upstream = get_upstream_items(jama, src_id)
     if not upstream:
-        print(f"  – No upstream links found for {source_key} (ID {src_id})")
+        print(f"  - No upstream links found for {source_key} (ID {src_id})")
         return
 
     print(f"  • Found {len(upstream)} upstream item(s) for {source_key} (ID {src_id}):")
@@ -64,7 +64,7 @@ def main():
     try:
         jama = load_jama()
     except Exception as e:
-        raise SystemExit(f"Error: {e}")
+        raise SystemExit(f"Error: {e}") from None
 
     # Define your mappings here
     mappings = [

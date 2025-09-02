@@ -41,6 +41,19 @@ DEFAULT_EXCLUDES = [
     "uv.lock",
     "package-lock.json",
     "yarn.lock",
+    # secrets/credentials (safety by default)
+    ".env",
+    "*.env",
+    "secrets.*",
+    "secret.*",
+    "credentials.*",
+    "*.pem",
+    "*.key",
+    "*.crt",
+    "*.p12",
+    "id_rsa",
+    "id_ecdsa",
+    "id_ed25519",
 ]
 
 # Broad set of known-text extensions (NOT a binary blocklist!)
@@ -237,7 +250,7 @@ def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
 
     # globs: pattern-first form with -g; search from '.'
     for g in globs:
-        args = base[:] + ["-g", g]  # -g supplies the pattern already
+        args = [*base[:], "-g", g]  # -g supplies the pattern already
         found = run_fd(args, ["."], add_default_pattern=False, verbose=verbose)
         if found is None:
             return None

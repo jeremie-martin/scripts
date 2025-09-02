@@ -32,11 +32,12 @@ def work(file: Path):
 
 
 # expose as entry points named 2twi / 2work via wrapper functions
+# These directly parse args from the function signatures.
 
 
 def cmd_2twi():
-    app(prog_name="2twi")
+    typer.run(twi)
 
 
 def cmd_2work():
-    app(prog_name="2work")
+    typer.run(work)

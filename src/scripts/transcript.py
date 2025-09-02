@@ -81,7 +81,7 @@ def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.
 
 
 def process_video(index, raw_url):
-    """Process a single video and return results with index"""
+    """Process a single video and return results with index (sequential inner work)."""
     # Sanitize URL by removing backslashes
     url = raw_url.replace("\\", "")
     video_id = extract_video_id(url)
@@ -92,13 +92,9 @@ def process_video(index, raw_url):
             print(f"[{index + 1}] Invalid YouTube URL")
         return index, result
 
-    # Fetch title and transcript in parallel for this video
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        title_future = executor.submit(get_title, url)
-        transcript_future = executor.submit(get_transcript_with_retry, video_id)
-
-        title = title_future.result()
-        transcript = transcript_future.result()
+    # Sequentially fetch title (cheap) then transcript (dominates runtime)
+    title = get_title(url)
+    transcript = get_transcript_with_retry(video_id)
 
     result = f"{title}:\n{transcript}\n"
 

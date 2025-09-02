@@ -113,7 +113,7 @@ class PhotoImporter:
         try:
             timestamp = file_path.stat().st_mtime
             return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-        except:
+        except Exception:
             return "unknown-date"
 
     def create_camera_symlinks(self, date_str):
@@ -393,34 +393,30 @@ class PhotoImporter:
         return file_dates
 
     def find_camera(self):
-        """Find a DCIM directory under common mount points (no sudo)."""
-        candidates = [Path("/media"), Path("/run/media"), Path("/Volumes")]
-        # Windows drive roots (A: to Z:)
-        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            candidates.append(Path(f"{letter}:/"))
-        for base in candidates:
+        """Find a DCIM directory under likely mount points with bounded search."""
+        # Windows: scan common removable drive letters, skipping A:/, B:/ and C:/
+        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            base = Path(f"{letter}:/")
             if not base.exists():
                 continue
             try:
-                for p in base.glob("**/DCIM"):
+                for p in base.glob("*/DCIM"):
+                    if p.is_dir():
+                        return str(p)
+            except Exception:
+                continue
+
+        # Unix-like: check a few mount roots, limited depth (2 levels)
+        for base in (Path("/media"), Path("/run/media"), Path("/Volumes")):
+            if not base.exists():
+                continue
+            try:
+                for p in base.glob("*/**/DCIM"):
                     if p.is_dir():
                         return str(p)
             except Exception:
                 continue
         return None
-
-    def _parse_size(self, size_str):
-        """Deprecated; retained for compatibility."""
-        try:
-            if size_str.endswith("G"):
-                return float(size_str[:-1])
-            if size_str.endswith("M"):
-                return float(size_str[:-1]) / 1024
-            if size_str.endswith("T"):
-                return float(size_str[:-1]) * 1024
-        except Exception:
-            return 0
-        return 0
 
     def run(self, source_dir=None):
         """Main entry point"""
@@ -450,13 +446,12 @@ class PhotoImporter:
         file_dates = self.group_files_by_date(files)
         processed = sum(1 for f in files if self.process_file(f, file_dates[f]))
 
-        if not self.dry_run:
-            # Create symlinks for each date processed (if enabled)
-            if self.create_symlinks:
-                dates_processed = set(file_dates.values())
-                for date_str in dates_processed:
-                    if date_str != "unknown-date":
-                        self.create_camera_symlinks(date_str)
+        if not self.dry_run and self.create_symlinks:
+            # Create symlinks for each date processed
+            dates_processed = set(file_dates.values())
+            for date_str in dates_processed:
+                if date_str != "unknown-date":
+                    self.create_camera_symlinks(date_str)
 
         if self.dry_run:
             self.show_summary()
