@@ -54,6 +54,13 @@ fi
 # Resolve repo root
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+# Resolve remote home and expand leading ~ in REMOTE_DIR locally
+# (Tilde does not expand inside quotes on the remote, so make it absolute.)
+REMOTE_HOME=$(ssh "${SSH_OPTS[@]}" "${REMOTE}" 'printf %s "$HOME"')
+if [[ "${REMOTE_DIR}" == ~* ]]; then
+  REMOTE_DIR="${REMOTE_DIR/#\~/${REMOTE_HOME}}"
+fi
+
 # Ensure remote dir exists (ALLOW password prompt)
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p \"${REMOTE_DIR}\""
 
@@ -81,6 +88,29 @@ rsync -e "${RSYNC_SSH[*]}" "${RSYNC_FLAGS[@]}" "${ROOT}/" "${REMOTE}:${REMOTE_DI
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "bash -s -l" <<EOF
 set -euo pipefail
 export PATH="\$HOME/.local/bin:\$PATH"
+
+# Provide a fallback version for setuptools-scm when .git is absent on remote
+# Prefer a PEP 440 version derived from local git describe; otherwise use timestamp+sha
+_derive_version() {
+  local descr count sha tag dirty ver
+  descr=$(git -C "$ROOT" describe --tags --dirty --long 2>/dev/null || true)
+  if [[ -n "\$descr" ]]; then
+    if [[ "\$descr" == *-dirty ]]; then dirty=".dirty"; descr="\${descr%-dirty}"; else dirty=""; fi
+    tag="\${descr%-*-*}"; tag="\${tag#v}"
+    local rest="\${descr#\${descr%-*-*}-}"
+    count="\${rest%%-*}"
+    sha="\${rest#\${count}-}"; sha="\${sha#g}"
+    if [[ "\$count" == 0 ]]; then ver="\${tag}\${dirty}"; else ver="\${tag}.post\${count}+g\${sha}\${dirty}"; fi
+  else
+    local ts sha2
+    ts=$(date +%Y%m%d%H%M%S)
+    sha2=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    ver="0.0.0.dev\${ts}+g\${sha2}"
+  fi
+  printf %s "\$ver"
+}
+export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SCRIPTS="\$(_derive_version)"
+echo "ℹ️  Using version: \$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SCRIPTS"
 
 if ! command -v uv >/dev/null 2>&1; then
   echo '⚙️  Installing uv on remote (missing)...'
