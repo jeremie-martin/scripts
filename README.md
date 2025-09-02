@@ -1,47 +1,47 @@
 ## Scripts — utility CLIs (modern Python package)
 
-### Install
+### Install (uv-native)
 ```bash
-# base tools
-uv pip install -e .
+# Base
+uv sync
 
-# with Jama tools
-uv pip install -e .[jama]
+# With extras
+uv sync --extra jama
+uv sync --extra media
 
-# with media tools (yt-dlp, transcripts)
-uv pip install -e .[media]
-
-# everything
-uv pip install -e .[full]
+# Both extras
+uv sync --extra jama --extra media
 ```
 
 ### Run
-Discrete commands (installed via entry points):
+Run any console script inside the project env (no manual activate needed):
 
 ```bash
-concat …
-transcript …          # requires [media] (default: 2 workers)
-ffcut …               # requires ffmpeg + yt-dlp on PATH
-gdiffpath …
-import-photos …
-jamaclean …           # requires [jama]
-jamaconcat …          # requires [jama]
-jamaconcatfull …      # requires [jama]
-jamafilltests …       # requires [jama]
-jamalinking …         # requires [jama]
-jamalinkingfull …     # requires [jama]
-jamanotest …          # requires [jama]
-jamatmp …             # requires [jama]
-2twi / img-twi …      # ImageMagick (writes to twi/, dir must pre-exist)
-2work / img-work …    # ImageMagick (writes to ../working/, dir must pre-exist)
+uv run concat …
+uv run transcript …    # needs --extra media at sync time
+uv run ffcut …         # needs ffmpeg on PATH; yt-dlp provided by [media]
+uv run gdiffpath …
+uv run import-photos …
+uv run jamaclean …     # needs --extra jama
+uv run jamaconcat …    # needs --extra jama
+uv run jamaconcatfull … # needs --extra jama
+uv run jamafilltests …  # needs --extra jama
+uv run jamalinking …    # needs --extra jama
+uv run jamalinkingfull … # needs --extra jama
+uv run jamanotest …     # needs --extra jama
+uv run jamatmp …        # needs --extra jama
+uv run 2twi …           # ImageMagick (writes to twi/, dir must pre-exist)
+uv run img-twi …        # ImageMagick (writes to twi/, dir must pre-exist)
+uv run 2work …          # ImageMagick (writes to ../working/, dir must pre-exist)
+uv run img-work …       # ImageMagick (writes to ../working/, dir must pre-exist)
 ```
 
 Umbrella wrapper (optional):
 
 ```bash
-scripts list          # show available commands
-scripts run concat -- <args>
-scripts jama clean -- ABSD-SWVER-123
+uv run scripts list
+uv run scripts run concat -- <args>
+uv run scripts jama clean -- ABSD-SWVER-123
 ```
 
 ### Environment
@@ -53,3 +53,10 @@ CLIENT_SECRET=…
 ```
 
 > Note: No `setup_scripts.sh` needed — entry points handle global shims.
+
+### (Optional) Non-uv environments
+Generate a `requirements.txt` from the lock for environments still on pip:
+```bash
+uv export --format requirements-txt -o requirements.txt   # from uv.lock
+```
+Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)

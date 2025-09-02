@@ -20,7 +20,6 @@ media = [
   # keep flexible, yt-dlp updates frequently
   "yt-dlp>=2024.10.0",
 ]
-full = ["scripts[jama,media]"]
 
 [project.scripts]
 # keep direct commands for muscle memory
