@@ -27,3 +27,10 @@ clean:
 help:
 	@grep -E '^##' Makefile | sed -e 's/## //'
 
+## ship: Rsync this repo to HOST (default dir ~/.scripts) and refresh tools
+ship:
+	@if [ -z "$(HOST)" ]; then \
+		echo "Usage: make ship HOST=user@host [DIR=~/.scripts]"; exit 2; \
+	fi
+	dev/ship.sh "$(HOST)" $(if $(DIR),--dir $(DIR))
+

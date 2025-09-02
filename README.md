@@ -60,3 +60,26 @@ Generate a `requirements.txt` from the lock for environments still on pip:
 uv export --format requirements-txt -o requirements.txt   # from uv.lock
 ```
 Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
+
+### Deploy to another machine (no GitHub access on target)
+
+From your dev machine, rsync the repo to the target host and auto-install the `scripts` tool:
+
+```bash
+# push to default ~/.scripts on the host
+dev/ship.sh ability@10.250.9.130
+
+# or with a custom directory
+dev/ship.sh ability@10.250.9.130 --dir ~/.custom-scripts
+
+# Makefile wrapper
+make ship HOST=ability@10.250.9.130
+make ship HOST=ability@10.250.9.130 DIR=~/.custom-scripts
+```
+
+What it does:
+
+* rsyncs the project (respects `.gitignore`, excludes `.venv/`, `.git/`, etc.)
+* bootstraps `uv` on the remote if missing
+* runs `make sync` and `make retool` remotely
+* repeatable and fast for subsequent updates
