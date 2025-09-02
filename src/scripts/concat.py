@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-Concatenate files (fd-powered).
+Concatenate files (fd-powered) while excluding binary files by default.
+
+Key behavior:
+- Uses `fd`/`fdfind` for fast discovery; falls back to Python scanning.
+- Excludes binary files by default via a two-stage approach:
+  1) Zero-IO allowlist of common text extensions & filenames.
+  2) Buffered sniff (up to --max-scan-bytes, default 65536 bytes):
+     - Rejects if any NUL bytes present.
+     - Rejects if decode (strict) fails with the selected --encoding (default utf-8).
+     - Rejects if >30% control bytes (excluding whitespace) are found.
+- Opt-in backdoor: --include-binary to include everything.
 """
 
 import argparse
@@ -14,6 +24,7 @@ from pathlib import Path
 from shutil import which
 
 FD_CANDIDATES = ["fdfind", "fd"]  # prefer 'fdfind'
+
 DEFAULT_EXCLUDES = [
     ".git/",
     "node_modules/",
@@ -32,6 +43,121 @@ DEFAULT_EXCLUDES = [
     "yarn.lock",
 ]
 
+# Broad set of known-text extensions (NOT a binary blocklist!)
+TEXT_EXTS = {
+    # config / data
+    "txt",
+    "log",
+    "cfg",
+    "conf",
+    "ini",
+    "toml",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "csv",
+    "tsv",
+    "ndjson",
+    "ipynb",
+    # markup / docs
+    "md",
+    "markdown",
+    "rst",
+    "adoc",
+    "tex",
+    "bib",
+    "html",
+    "htm",
+    "xhtml",
+    "shtml",
+    "xml",
+    "xsd",
+    "xsl",
+    "xslt",
+    "dtd",
+    "svg",
+    # web / styles
+    "css",
+    "scss",
+    "sass",
+    "less",
+    # scripts / shells
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "psm1",
+    "bat",
+    "cmd",
+    # make / build
+    "make",
+    "mk",
+    "cmake",
+    "gradle",
+    "groovy",
+    # programming
+    "c",
+    "h",
+    "cpp",
+    "cc",
+    "cxx",
+    "hpp",
+    "hh",
+    "hxx",
+    "m",
+    "mm",  # Obj-C
+    "cs",
+    "java",
+    "kt",
+    "kts",
+    "go",
+    "rs",
+    "py",
+    "rb",
+    "php",
+    "pl",
+    "pm",
+    "r",
+    "jl",
+    "swift",
+    "scala",
+    "clj",
+    "cljs",
+    "edn",
+    "hs",
+    "lhs",
+    "ex",
+    "exs",
+    "erl",
+    "lua",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "coffee",
+    "sql",
+    "dbml",
+    "proto",
+    "idl",
+    "nix",
+    "sol",
+    "mdx",
+    # infra
+    "dockerfile",
+    "env",
+    "tf",
+    "tfvars",
+    "nomad",
+    "hcl",
+}
+
+# Known text *basenames* without extensions
+TEXT_NAMES = {"Dockerfile", "Makefile", ".gitignore", ".gitattributes", ".editorconfig"}
+
 
 def find_fd():
     """Find available fd/fdfind command."""
@@ -41,10 +167,15 @@ def find_fd():
     return None
 
 
+def sh_quote(s: str) -> str:
+    if all(c.isalnum() or c in "._-/:=+" for c in s):
+        return s
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
 def run_fd(base_args, paths, add_default_pattern=False, verbose=False):
     """
-    If add_default_pattern=True, we inject a default regex pattern '.*'
-    so that 'paths' are interpreted as search roots, not as a pattern.
+    If add_default_pattern=True, inject default regex '.*' so 'paths' are search roots.
     """
     if not paths:
         return []
@@ -68,12 +199,6 @@ def run_fd(base_args, paths, add_default_pattern=False, verbose=False):
 
     data = out.stdout.decode("utf-8", errors="replace")
     return [p for p in data.split("\0") if p]
-
-
-def sh_quote(s: str) -> str:
-    if all(c.isalnum() or c in "._-/:=+" for c in s):
-        return s
-    return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
 def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
@@ -114,7 +239,7 @@ def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
 
     # globs: pattern-first form with -g; search from '.'
     for g in globs:
-        args = base[:] + ["-g", g]  # -g already supplies the pattern
+        args = base[:] + ["-g", g]  # -g supplies the pattern already
         found = run_fd(args, ["."], add_default_pattern=False, verbose=verbose)
         if found is None:
             return None
@@ -159,6 +284,92 @@ def gather_fallback(inputs, excludes, verbose=False):
             if os.path.isfile(p) and not is_excluded(p, excludes):
                 files.add(os.path.abspath(p))
     return sorted(files)
+
+
+def _looks_text_by_name(path: str) -> bool:
+    base = os.path.basename(path)
+    if base in TEXT_NAMES:
+        return True
+    ext = os.path.splitext(base)[1].lower().lstrip(".")
+    if ext in TEXT_EXTS:
+        return True
+    return False
+
+
+def _control_ratio(sample: bytes) -> float:
+    """
+    Compute ratio of control bytes excluding common whitespace.
+    """
+    if not sample:
+        return 0.0
+    controls = 0
+    for b in sample:
+        if b in (9, 10, 13):  # \t, \n, \r
+            continue
+        if b < 32 or b == 127:
+            controls += 1
+    return controls / len(sample)
+
+
+def is_probably_text(
+    path: str, encoding: str = "utf-8", max_bytes: int = 65536
+) -> bool:
+    """
+    Fast text-vs-binary sniffing.
+    - Trusts filename/extension allowlist to avoid I/O for common text.
+    - Otherwise reads up to max_bytes and applies:
+        * NUL byte check
+        * strict decode with provided encoding
+        * control-character ratio threshold
+    """
+    try:
+        if _looks_text_by_name(path):
+            return True
+
+        with open(path, "rb") as f:
+            sample = f.read(max_bytes)
+
+        if not sample:
+            return True  # empty files: treat as text
+
+        if b"\x00" in sample:
+            return False
+
+        # Strict decode with user-selected encoding; if it fails, likely binary.
+        try:
+            sample.decode(encoding, errors="strict")
+        except Exception:
+            # Many true binaries will fail here; if it's simply non-UTF8 text and
+            # the user didn't pass the right --encoding, they can override.
+            return False
+
+        # Guardrail for unusual encodings that still decode: control char ratio
+        if _control_ratio(sample) > 0.30:
+            return False
+
+        return True
+    except Exception:
+        # On any unexpected error during sniffing, err on the side of "not text".
+        return False
+
+
+def filter_text_files(
+    file_paths,
+    include_binary: bool,
+    encoding: str,
+    max_scan_bytes: int,
+    show_skipped: bool,
+) -> list:
+    if include_binary:
+        return file_paths
+    kept = []
+    for fp in file_paths:
+        if is_probably_text(fp, encoding=encoding, max_bytes=max_scan_bytes):
+            kept.append(fp)
+        else:
+            if show_skipped:
+                print(f"[skip binary] {os.path.relpath(fp)}", file=sys.stderr)
+    return kept
 
 
 def concatenate(
@@ -226,11 +437,29 @@ def main():
         action="store_true",
         help="Do not print 'path:' header before file contents",
     )
-    parser.add_argument("--encoding", default="utf-8", help="File encoding (default: utf-8)")
+    parser.add_argument(
+        "--encoding", default="utf-8", help="File encoding (default: utf-8)"
+    )
     parser.add_argument(
         "--errors",
         default="replace",
         help="Decode errors policy: strict|ignore|replace",
+    )
+    parser.add_argument(
+        "--include-binary",
+        action="store_true",
+        help="Include binary files (disable binary auto-exclusion)",
+    )
+    parser.add_argument(
+        "--max-scan-bytes",
+        type=int,
+        default=65536,
+        help="Max bytes to sniff per file when detecting binaries (default: 65536)",
+    )
+    parser.add_argument(
+        "--show-skipped",
+        action="store_true",
+        help="Log skipped binary files to stderr",
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Verbose (shows fd command)"
@@ -274,9 +503,22 @@ def main():
         print("No matching files.", file=sys.stderr)
         sys.exit(2)
 
+    # Binary exclusion happens here (post-discovery, pre-concatenation)
+    files = filter_text_files(
+        files,
+        include_binary=args.include_binary,
+        encoding=args.encoding,
+        max_scan_bytes=args.max_scan_bytes,
+        show_skipped=args.show_skipped,
+    )
+
+    if not files:
+        print(
+            "No text files to process (all were binary or excluded).", file=sys.stderr
+        )
+        sys.exit(3)
+
     if args.terminal:
-        # Print paths first (like before), then stream contents to stdout
-        # We still use a buffer to keep behavior identical (headers + contents together)
         buf = StringIO()
         concatenate(
             files,
