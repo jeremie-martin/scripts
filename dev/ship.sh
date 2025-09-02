@@ -4,69 +4,95 @@ set -euo pipefail
 # ship.sh — rsync the repo to a remote host and install tools there.
 #
 # Usage:
-#   dev/ship.sh ability@10.250.9.130                # default dir ~/.scripts
-#   dev/ship.sh ability@10.250.9.130 --dir ~/.custom-scripts
-#   dev/ship.sh ability@10.250.9.130 --dry-run      # show what would sync
+#   dev/ship.sh ability@10.250.9.30                  # default dir ~/.scripts; prompts for pw if needed
+#   dev/ship.sh ability@10.250.9.30 --force-password # force password/KBD-interactive auth
+#   dev/ship.sh ability@10.250.9.30 --dir ~/.custom  # custom target dir
+#   dev/ship.sh ability@10.250.9.30 --dry-run        # show what would sync
+#   dev/ship.sh ability@10.250.9.30 --ssh-opts "-p 2222 -o StrictHostKeyChecking=no"
 #
-# Requires: rsync, ssh locally; make on remote; network for uv/pypi on remote.
-# Notes:    Respects .gitignore; excludes .git/ explicitly; uses --delete.
+# Notes:
+# - Respects .gitignore, excludes .git/, cleans stale files (but keeps excluded like .venv/).
+# - Does NOT preserve mtimes → avoids clock-skew warnings from make.
+# - Reuses one SSH connection (ControlMaster) to minimize repeated prompts.
 
 REMOTE="${1:-}"
-if [[ -z "${REMOTE}" || "${REMOTE}" = "--help" || "${REMOTE}" = "-h" ]]; then
-  echo "Usage: dev/ship.sh <user@host> [--dir <remote_dir>] [--dry-run]"
+if [[ -z "${REMOTE}" || "${REMOTE}" == "--help" || "${REMOTE}" == "-h" ]]; then
+  echo "Usage: dev/ship.sh <user@host> [--dir <remote_dir>] [--dry-run] [--force-password] [--no-mux] [--ssh-opts '<opts>']"
   exit 2
 fi
 shift || true
 
 REMOTE_DIR="~/.scripts"
 DRY_RUN=0
+FORCE_PW=0
+USE_MUX=1
+SSH_OPTS=()
+
+# Connection sharing (reduces repeated prompts across ssh/rsync/ssh)
+if [[ "${USE_MUX}" -eq 1 ]]; then
+  mkdir -p "$HOME/.ssh"
+  SSH_OPTS+=( -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$HOME/.ssh/cm-%r@%h:%p" )
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dir)      REMOTE_DIR="$2"; shift 2;;
-    --dry-run)  DRY_RUN=1; shift;;
+    --dir)           REMOTE_DIR="$2"; shift 2;;
+    --dry-run)       DRY_RUN=1; shift;;
+    --force-password|--password)
+                     FORCE_PW=1; shift;;
+    --no-mux)        USE_MUX=0; shift;;
+    --ssh-opts)      SSH_OPTS+=($2); shift 2;;
     *) echo "Unknown arg: $1"; exit 2;;
   esac
 done
 
+# Force a password prompt (disable pubkey) if requested
+if [[ "${FORCE_PW}" -eq 1 ]]; then
+  SSH_OPTS+=( -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive )
+fi
+
 # Resolve repo root
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-# Ensure remote dir exists
-ssh -o BatchMode=yes "${REMOTE}" "mkdir -p ${REMOTE_DIR}"
+# Ensure remote dir exists (ALLOW password prompt)
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p ${REMOTE_DIR}"
 
-# Build rsync flags
-RSYNC_FLAGS=(-az --delete --delete-excluded --partial --inplace
+# Build rsync (use same SSH options)
+RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
+
+# Flags:
+# -r  recurse
+# -l  copy symlinks as symlinks
+# -p  preserve permissions
+# -D  preserve devices/specials (safe over ssh)
+# -z  compress
+# --delete  remove remote files that no longer exist locally
+# IMPORTANT: we intentionally DO NOT preserve times (-t) and DO NOT --delete-excluded
+RSYNC_FLAGS=(-rlpDz --delete --partial --inplace
              --info=stats2,progress2 --human-readable
-             --filter=':- .gitignore' --exclude='.git/' )
+             --filter=':- .gitignore' --exclude='.git/')
 
-if [[ "${DRY_RUN}" -eq 1 ]]; then
-  RSYNC_FLAGS+=(-n)
-  echo ">>> DRY RUN: showing what would sync"
+[[ "${DRY_RUN}" -eq 1 ]] && RSYNC_FLAGS+=(-n) && echo ">>> DRY RUN: showing what would sync"
+
+# Trailing slash on source to copy contents into target dir
+rsync -e "${RSYNC_SSH[*]}" "${RSYNC_FLAGS[@]}" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
+
+# Post-sync: ensure uv exists and run make targets (which will also ensure PATH in rc files)
+ssh "${SSH_OPTS[@]}" "${REMOTE}" "bash -s -l" <<EOF
+set -euo pipefail
+export PATH="\$HOME/.local/bin:\$PATH"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo '⚙️  Installing uv on remote (missing)...'
+  curl -fsSL https://astral.sh/uv/install.sh | sh
+  export PATH="\$HOME/.local/bin:\$PATH"
 fi
 
-# Trailing slashes matter: copy contents of ROOT/ into REMOTE_DIR/
-rsync "${RSYNC_FLAGS[@]}" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
-
-# On the remote:
-# - ensure uv exists (install to ~/.local/bin if missing)
-# - export PATH so uv is visible
-# - run make targets
-ssh "${REMOTE}" bash -lc "
-  set -euo pipefail
-  export PATH=\"\$HOME/.local/bin:\$PATH\"
-
-  if ! command -v uv >/dev/null 2>&1; then
-    echo '⚙️  Installing uv on remote (missing)...'
-    curl -fsSL https://astral.sh/uv/install.sh | sh
-    export PATH=\"\$HOME/.local/bin:\$PATH\"
-  fi
-
-  cd ${REMOTE_DIR}
-  echo '📦 make sync'
-  make sync
-  echo '🔄 make retool'
-  make retool
-"
+cd ${REMOTE_DIR}
+echo '📦 make sync'
+make sync
+echo '🔄 make retool'
+make retool
+EOF
 
 echo "✅ Shipped to ${REMOTE}:${REMOTE_DIR} and refreshed tools."
