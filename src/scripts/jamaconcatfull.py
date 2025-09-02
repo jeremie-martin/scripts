@@ -12,27 +12,15 @@ from typing import Optional, List, Set
 from py_jama_rest_client.client import JamaClient
 import pyperclip
 
-JAMA_URL = os.getenv("JAMA_URL")
-CLIENT_ID = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-
-if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
-    sys.exit(
-        f"Error: Missing one or more required environment variables: JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
-    )
-
-# Initialize JAMA client
-jama = JamaClient(
-    host_domain=JAMA_URL, oauth=True, credentials=(CLIENT_ID, CLIENT_SECRET)
-)
+# Environment variables will be loaded in main()
 
 
-def get_item_id(document_key: str) -> Optional[int]:
+def get_item_id(jama_client, document_key: str) -> Optional[int]:
     """
     Get Jama internal item ID from a document key.
     """
     try:
-        items = jama.get_abstract_items(contains=document_key)
+        items = jama_client.get_abstract_items(contains=document_key)
         for item in items:
             if item.get("documentKey") == document_key:
                 return item.get("id")
@@ -42,7 +30,7 @@ def get_item_id(document_key: str) -> Optional[int]:
 
 
 def collect_keys_from_folder(
-    folder_id: int, recursive: bool = False, seen: Set[int] = None
+    jama_client, folder_id: int, recursive: bool = False, seen: Set[int] = None
 ) -> List[str]:
     """
     Fetch all document keys from items in the given Jama folder.
@@ -53,7 +41,7 @@ def collect_keys_from_folder(
     keys: List[str] = []
 
     try:
-        children = jama.get_item_children(folder_id)
+        children = jama_client.get_item_children(folder_id)
     except Exception as e:
         print(f"Error fetching children for folder {folder_id}: {e}", file=sys.stderr)
         return keys
@@ -70,19 +58,19 @@ def collect_keys_from_folder(
             keys.append(doc_key)
         # Otherwise, assume it's a folder and recurse if requested
         elif recursive:
-            keys.extend(collect_keys_from_folder(cid, recursive, seen))
+            keys.extend(collect_keys_from_folder(jama_client, cid, recursive, seen))
 
     return keys
 
 
-def fetch_fields(document_key: str) -> Optional[str]:
+def fetch_fields(jama_client, document_key: str) -> Optional[str]:
     """
     Download a Jama item by document key and return a formatted string of its fields:
 
     FieldName: FieldValue
     ...
     """
-    item_id = get_item_id(document_key)
+    item_id = get_item_id(jama_client, document_key)
     if not item_id:
         print(
             f"Error: Could not find item with document key '{document_key}'",
@@ -91,7 +79,7 @@ def fetch_fields(document_key: str) -> Optional[str]:
         return None
 
     try:
-        item = jama.get_item(item_id)
+        item = jama_client.get_item(item_id)
     except Exception as e:
         print(f"Error retrieving item '{document_key}': {e}", file=sys.stderr)
         return None
@@ -127,6 +115,20 @@ def main():
     )
     args = parser.parse_args()
 
+    # Load configuration after parsing arguments (so --help works)
+    JAMA_URL = os.getenv("JAMA_URL")
+    CLIENT_ID = os.getenv("CLIENT_ID")
+    CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+    if not all([JAMA_URL, CLIENT_ID, CLIENT_SECRET]):
+        sys.exit(
+            f"Error: Missing one or more required environment variables: JAMA_URL ({JAMA_URL}), CLIENT_ID ({CLIENT_ID}), CLIENT_SECRET ({CLIENT_SECRET})"
+        )
+
+    # Initialize JAMA client
+    jama = JamaClient(
+        host_domain=JAMA_URL, oauth=True, credentials=(CLIENT_ID, CLIENT_SECRET)
+    )
+
     # Collect document keys, expanding folders if requested
     document_keys: List[str] = []
     # if args.keys is a text file which exists, just loads all the keys from the text file (either absolute or relative paths)
@@ -138,14 +140,14 @@ def main():
 
     for key in keys:
         if "FLD" in key.upper():
-            folder_id = get_item_id(key)
+            folder_id = get_item_id(jama, key)
             if not folder_id:
                 print(
                     f"Error: Could not find folder with document key '{key}'",
                     file=sys.stderr,
                 )
                 continue
-            found = collect_keys_from_folder(folder_id, recursive=args.recursive)
+            found = collect_keys_from_folder(jama, folder_id, recursive=args.recursive)
             if not found:
                 print(f"No items found in folder '{key}'.", file=sys.stderr)
             else:
@@ -158,7 +160,7 @@ def main():
 
     outputs: List[str] = []
     for doc_key in document_keys:
-        result = fetch_fields(doc_key)
+        result = fetch_fields(jama, doc_key)
         if result:
             outputs.append(result)
 

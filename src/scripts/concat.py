@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to concatenate files based on patterns.
+Concatenate files (fd-powered).
 """
 
 import argparse
@@ -21,16 +21,15 @@ DEFAULT_EXCLUDES = [
     "venv/",
     "__pycache__/",
     "dist/",
-    ".next/",
-    ".nuxt/",
     "build/",
-    ".cache/",
-    "target/",
-    "*.log",
-    "*.tmp",
-    "*.swp",
-    "*.swo",
-    "*~",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    "*.pyc",
+    "*.pyo",
+    "*.class",
+    "uv.lock",
+    "package-lock.json",
+    "yarn.lock",
 ]
 
 
@@ -42,158 +41,278 @@ def find_fd():
     return None
 
 
-def run_fd(pattern, path=".", excludes=None, fd_cmd=None):
-    """Run fd command to find files."""
-    if not fd_cmd:
-        fd_cmd = find_fd()
-        if not fd_cmd:
-            return []
-
-    cmd = [fd_cmd, "--type", "f", "--glob", pattern]
-    if excludes:
-        for exclude in excludes:
-            cmd.extend(["--exclude", exclude])
-
-    cmd.append(path)
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout.strip().split('\n') if result.stdout.strip() else []
-    except subprocess.CalledProcessError:
+def run_fd(base_args, paths, add_default_pattern=False, verbose=False):
+    """
+    If add_default_pattern=True, we inject a default regex pattern '.*'
+    so that 'paths' are interpreted as search roots, not as a pattern.
+    """
+    if not paths:
         return []
 
+    cmd = base_args[:]
+    if add_default_pattern:
+        cmd.append(".*")  # explicit PATTERN so following args are PATHS
 
-def find_files_with_fd(pattern, path=".", excludes=None):
-    """Find files using fd."""
-    fd_cmd = find_fd()
-    if fd_cmd:
-        return run_fd(pattern, path, excludes, fd_cmd)
-    else:
-        # Fallback to glob
-        return find_files_with_glob(pattern, path, excludes)
+    cmd += ["--print0"] + paths
+    if verbose:
+        print("FD CMD:", " ".join(map(sh_quote, cmd)), file=sys.stderr)
 
+    try:
+        out = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+        )
+    except Exception as e:
+        if verbose:
+            print(f"fd invocation failed: {e}", file=sys.stderr)
+        return None
 
-def find_files_with_glob(pattern, path=".", excludes=None):
-    """Find files using glob."""
-    if excludes is None:
-        excludes = []
-
-    all_files = []
-    for root, dirs, files in os.walk(path):
-        # Skip excluded directories
-        dirs[:] = [d for d in dirs if not any(fnmatch.fnmatch(os.path.join(root, d), exc) for exc in excludes)]
-
-        for file in files:
-            if fnmatch.fnmatch(file, pattern):
-                # Check if file path matches any exclude pattern
-                full_path = os.path.join(root, file)
-                if not any(fnmatch.fnmatch(full_path, exc) for exc in excludes):
-                    all_files.append(full_path)
-
-    return all_files
+    data = out.stdout.decode("utf-8", errors="replace")
+    return [p for p in data.split("\0") if p]
 
 
-def find_files(pattern, path=".", excludes=None, use_fd=True):
-    """Find files using fd if available, otherwise glob."""
-    if use_fd and find_fd():
-        return find_files_with_fd(pattern, path, excludes)
-    else:
-        return find_files_with_glob(pattern, path, excludes)
+def sh_quote(s: str) -> str:
+    if all(c.isalnum() or c in "._-/:=+" for c in s):
+        return s
+    return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
-def concatenate_files(files, output_file, separator="\n"):
-    """Concatenate files into output file."""
-    with open(output_file, 'w', encoding='utf-8') as outfile:
-        for i, file_path in enumerate(files):
-            if i > 0:
-                outfile.write(separator)
+def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
+    fd = find_fd()
+    if not fd:
+        return None  # signal to fall back
 
-            try:
-                with open(file_path, 'r', encoding='utf-8') as infile:
-                    content = infile.read()
-                    outfile.write(content)
-            except UnicodeDecodeError:
-                # Try with different encoding
-                try:
-                    with open(file_path, 'r', encoding='latin-1') as infile:
-                        content = infile.read()
-                        outfile.write(content)
-                except Exception as e:
-                    print(f"Error reading {file_path}: {e}", file=sys.stderr)
-            except Exception as e:
-                print(f"Error reading {file_path}: {e}", file=sys.stderr)
+    base = [fd, "--type", "f", "--color", "never", "--hidden"]
+    if not use_gitignore:
+        base += ["--no-ignore"]
+    for pat in excludes:
+        base += ["-E", pat]
+
+    files = set()
+    dirs, globs, files_given = [], [], []
+    for it in inputs:
+        it = it.strip()
+        if not it:
+            continue
+        if os.path.isfile(it):
+            files_given.append(os.path.abspath(it))
+        elif os.path.isdir(it):
+            dirs.append(it)
+        else:
+            globs.append(it)
+
+    # explicit files
+    for f in files_given:
+        files.add(os.path.abspath(f))
+
+    # directories: add explicit pattern '.*' so paths are treated as roots
+    if dirs:
+        found = run_fd(base, dirs, add_default_pattern=True, verbose=verbose)
+        if found is None:
+            return None
+        for p in found:
+            files.add(os.path.abspath(p))
+
+    # globs: pattern-first form with -g; search from '.'
+    for g in globs:
+        args = base[:] + ["-g", g]  # -g already supplies the pattern
+        found = run_fd(args, ["."], add_default_pattern=False, verbose=verbose)
+        if found is None:
+            return None
+        for p in found:
+            files.add(os.path.abspath(p))
+
+    return sorted(files)
+
+
+def is_excluded(path, patterns):
+    rel = os.path.relpath(path)
+    abs_ = os.path.abspath(path)
+    for pat in patterns:
+        if pat.endswith("/"):
+            folder = pat[:-1]
+            parts = Path(rel).parts
+            if folder in parts:
+                return True
+        if (
+            fnmatch.fnmatch(rel, pat)
+            or fnmatch.fnmatch(os.path.basename(rel), pat)
+            or fnmatch.fnmatch(abs_, pat)
+        ):
+            return True
+    return False
+
+
+def gather_fallback(inputs, excludes, verbose=False):
+    files = set()
+    for it in inputs:
+        it = it.strip()
+        if not it:
+            continue
+        candidates = []
+        if os.path.isdir(it):
+            for root, _, fs in os.walk(it):
+                for f in fs:
+                    candidates.append(os.path.join(root, f))
+        else:
+            candidates.extend(pyglob.glob(it, recursive=True))
+        for p in candidates:
+            if os.path.isfile(p) and not is_excluded(p, excludes):
+                files.add(os.path.abspath(p))
+    return sorted(files)
+
+
+def concatenate(
+    file_paths,
+    output_buffer,
+    print_paths=True,
+    add_header=True,
+    encoding="utf-8",
+    errors="replace",
+):
+    seen = set()
+    for fp in file_paths:
+        rel = os.path.relpath(fp)
+        if rel in seen:
+            continue
+        seen.add(rel)
+
+        # print path listing to STDOUT (like before)
+        if print_paths:
+            print(rel)
+
+        if not os.path.isfile(fp):
+            print(f"Error: '{rel}' is not a regular file", file=sys.stderr)
+            continue
+
+        if add_header:
+            print(f"{rel}:", file=output_buffer)
+        try:
+            with open(fp, "r", encoding=encoding, errors=errors) as f:
+                output_buffer.write(f.read())
+        except Exception as e:
+            print(f"Error reading '{rel}': {e}", file=sys.stderr)
+
+        print("", file=output_buffer)  # blank line between files
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Concatenate files matching a pattern into a single output file."
-    )
+    parser = argparse.ArgumentParser(description="Concatenate files (fd-powered).")
     parser.add_argument(
-        "pattern",
-        help="File pattern to match (e.g., '*.py', '*.txt')"
-    )
-    parser.add_argument(
-        "-o", "--output",
-        required=True,
-        help="Output file path"
-    )
-    parser.add_argument(
-        "-p", "--path",
-        default=".",
-        help="Search path (default: current directory)"
-    )
-    parser.add_argument(
-        "--no-fd",
+        "-t",
+        "--terminal",
         action="store_true",
-        help="Don't use fd/fdfind even if available"
+        help="Print to terminal instead of copying to clipboard",
     )
     parser.add_argument(
+        "-g",
+        "--gitignore",
+        action="store_true",
+        help="Respect .gitignore/.fdignore (default off)",
+    )
+    parser.add_argument(
+        "-e",
         "--exclude",
         action="append",
-        help="Exclude pattern (can be used multiple times)"
+        default=[],
+        help="Extra excludes (wildcards or dirs); repeatable",
     )
     parser.add_argument(
-        "--separator",
-        default="\n",
-        help="Separator between files (default: newline)"
-    )
-    parser.add_argument(
-        "--list-only",
+        "--no-default-excludes",
         action="store_true",
-        help="Only list files that would be concatenated"
+        help="Disable built-in default excludes",
     )
-
+    parser.add_argument(
+        "--no-header",
+        action="store_true",
+        help="Do not print 'path:' header before file contents",
+    )
+    parser.add_argument("--encoding", default="utf-8", help="File encoding (default: utf-8)")
+    parser.add_argument(
+        "--errors",
+        default="replace",
+        help="Decode errors policy: strict|ignore|replace",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Verbose (shows fd command)"
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Files, directories, or globs. If empty, reads from stdin.",
+    )
     args = parser.parse_args()
 
-    # Combine default and user excludes
-    excludes = DEFAULT_EXCLUDES + (args.exclude or [])
+    inputs = (
+        args.files
+        if args.files
+        else [line.strip() for line in sys.stdin if line.strip()]
+        if not sys.stdin.isatty()
+        else []
+    )
+    if not inputs:
+        print(
+            "No inputs given. Provide files/dirs/globs or pipe a list on stdin.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    # Find files
-    files = find_files(args.pattern, args.path, excludes, not args.no_fd)
+    excludes = (
+        [] if args.no_default_excludes else list(DEFAULT_EXCLUDES)
+    ) + args.exclude
+
+    # Try fd; fall back if unavailable or if call failed
+    files = gather_with_fd(inputs, excludes, args.gitignore, verbose=args.verbose)
+    if files is None:
+        if args.verbose:
+            print(
+                "fdfind/fd not found — falling back to Python scanning.",
+                file=sys.stderr,
+            )
+        files = gather_fallback(inputs, excludes, verbose=args.verbose)
 
     if not files:
-        print(f"No files found matching pattern '{args.pattern}' in '{args.path}'", file=sys.stderr)
-        return 1
+        print("No matching files.", file=sys.stderr)
+        sys.exit(2)
 
-    # Sort files for consistent output
-    files.sort()
+    if args.terminal:
+        # Print paths first (like before), then stream contents to stdout
+        # We still use a buffer to keep behavior identical (headers + contents together)
+        buf = StringIO()
+        concatenate(
+            files,
+            buf,
+            print_paths=True,
+            add_header=not args.no_header,
+            encoding=args.encoding,
+            errors=args.errors,
+        )
+        out = buf.getvalue()
+        buf.close()
+        print(out, end="")
+    else:
+        buf = StringIO()
+        concatenate(
+            files,
+            buf,
+            print_paths=True,
+            add_header=not args.no_header,
+            encoding=args.encoding,
+            errors=args.errors,
+        )
+        out = buf.getvalue()
+        buf.close()
+        try:
+            import pyperclip
 
-    if args.list_only:
-        print("Files that would be concatenated:")
-        for file in files:
-            print(f"  {file}")
-        print(f"\nTotal: {len(files)} files")
-        return 0
-
-    # Concatenate files
-    try:
-        concatenate_files(files, args.output, args.separator)
-        print(f"Successfully concatenated {len(files)} files into '{args.output}'")
-        return 0
-    except Exception as e:
-        print(f"Error concatenating files: {e}", file=sys.stderr)
-        return 1
+            pyperclip.copy(out)
+            print("Output copied to clipboard.", file=sys.stderr)
+        except Exception as e:
+            print(
+                f"Clipboard copy failed ({e}). Falling back to terminal output.",
+                file=sys.stderr,
+            )
+            print(out, end="")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
