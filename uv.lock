@@ -224,6 +224,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "typer" },
+    { name = "yt-dlp" },
 ]
 
 [package.optional-dependencies]
@@ -249,6 +250,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.9" },
     { name = "typer", specifier = ">=0.12.3" },
     { name = "youtube-transcript-api", marker = "extra == 'media'", specifier = ">=1.2.2" },
+    { name = "yt-dlp", specifier = ">=2025.8.27" },
     { name = "yt-dlp", marker = "extra == 'media'", specifier = ">=2024.10.0" },
 ]
 provides-extras = ["jama", "media", "dev"]

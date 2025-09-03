@@ -12,7 +12,7 @@ UV := uv
 retool:
 	@echo "🔄 Reinstalling scripts with uv..."
 	$(UV) tool uninstall scripts || true
-	$(UV) tool install --no-cache .
+	$(UV) tool install --no-cache --from .[jama] scripts
 
 ## sync: Sync project dependencies (including extras)
 sync:
