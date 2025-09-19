@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import sys
 
 from scripts.jama.common import (
     collect_keys_from_folder,
     find_field_key,
+    get_field_names_from_schema,
     get_item_id,
     load_jama,
 )
@@ -14,6 +16,8 @@ from scripts.jama.common import (
 def update_test_fields(jama_client, doc_id: str):
     """
     Updates empty test fields with default values for a given document key.
+    Uses item type schema to find correct field names, including fields that
+    are missing from the item response when empty.
     """
     try:
         # Find the item ID by document key
@@ -22,9 +26,21 @@ def update_test_fields(jama_client, doc_id: str):
             print(f"Error: Could not find item with document key '{doc_id}'", file=sys.stderr)
             return
 
-        # Retrieve current fields
+        # Retrieve current fields and item type
         item = jama_client.get_item(item_id)
         fields = item.get("fields", {})
+        item_type_id = item.get("itemType")
+
+        if not item_type_id:
+            print(f"Error: Could not determine item type for {doc_id}", file=sys.stderr)
+            return
+
+        # Get field name mappings from schema (cached)
+        schema_fields = get_field_names_from_schema(
+            os.getenv("JAMA_URL", ""),
+            os.getenv("CLIENT_ID", ""),
+            item_type_id
+        )
 
         # Default field values
         field_mappings = {
@@ -36,27 +52,56 @@ def update_test_fields(jama_client, doc_id: str):
         }
 
         updates = []
-        # Determine actual keys present on this item matching our bases
-        key_map = {base: find_field_key(fields, base) for base in field_mappings}
 
-        # Prepare updates only for actual keys present and currently empty
+        # For each field we want to update, find the actual schema field name
         for base, default in field_mappings.items():
-            actual = key_map.get(base)
-            if actual:
-                if not fields.get(actual):
-                    updates.append(
-                        {
-                            "op": "replace",
-                            "path": f"/fields/{actual}",
-                            "value": default,
-                        }
-                    )
+            # First try to get from schema
+            actual_field_name = schema_fields.get(base)
+
+            if actual_field_name:
+                # Check if field is missing or empty
+                current_value = fields.get(actual_field_name)
+                if current_value is None:
+                    # Field doesn't exist in the response, use 'add' operation
+                    updates.append({
+                        "op": "add",
+                        "path": f"/fields/{actual_field_name}",
+                        "value": default,
+                    })
+                    print(f"Will add {base} ({actual_field_name}): '{default}'")
+                elif not current_value:  # Empty string or other falsy value
+                    # Field exists but is empty, use 'replace' operation
+                    updates.append({
+                        "op": "replace",
+                        "path": f"/fields/{actual_field_name}",
+                        "value": default,
+                    })
+                    print(f"Will replace {base} ({actual_field_name}): '{default}'")
+                else:
+                    print(f"Field {base} ({actual_field_name}) already has value: '{current_value[:50]}...' - skipping")
             else:
-                print(f"Warning: field '{base}' not present on item; skipping", file=sys.stderr)
+                # Fallback to old method for fields that don't follow the $suffix pattern
+                fallback_field = find_field_key(fields, base)
+                if fallback_field:
+                    current_value = fields.get(fallback_field)
+                    if not current_value:
+                        # Field exists in response but is empty, use 'replace'
+                        updates.append({
+                            "op": "replace",
+                            "path": f"/fields/{fallback_field}",
+                            "value": default,
+                        })
+                        print(f"Will replace {base} ({fallback_field}): '{default}' (fallback method)")
+                    else:
+                        print(f"Field {base} ({fallback_field}) already has value - skipping")
+                else:
+                    print(f"Warning: field '{base}' not found in schema or item; skipping", file=sys.stderr)
 
         # Apply updates if any
         if updates:
-            print(f"\nApplying updates to {doc_id}:", json.dumps(updates, indent=2))
+            print(f"\nApplying {len(updates)} updates to {doc_id}:")
+            for update in updates:
+                print(f"  {update['path']} = '{update['value']}'")
             jama_client.patch_item(item_id, updates)
             print(f"Successfully updated empty fields for {doc_id}")
         else:

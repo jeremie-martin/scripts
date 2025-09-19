@@ -13,6 +13,7 @@ from py_jama_rest_client.client import APIException, JamaClient
 __all__ = [
     "collect_keys_from_folder",
     "find_field_key",
+    "get_field_names_from_schema",
     "get_item_id",
     "get_item_id_cached",
     "jama_url_for_item",
@@ -90,6 +91,40 @@ def find_field_key(fields: dict, prefix: str) -> str | None:
         if k.lower().startswith(pref):
             return k
     return None
+
+
+@lru_cache(maxsize=256)
+def get_field_names_from_schema(host: str, client_id: str, item_type_id: int) -> dict[str, str]:
+    """Get field name mappings from item type schema, cached by host/client_id/item_type_id.
+
+    Returns a dict mapping base field names (like 'initial_conditions') to their
+    actual schema names (like 'initial_conditions$199').
+
+    Call as: get_field_names_from_schema(os.getenv("JAMA_URL",""), os.getenv("CLIENT_ID",""), item_type_id)
+    """
+    jama = load_jama()
+    try:
+        item_type = jama.get_item_type(item_type_id)
+        field_defs = item_type.get("fields", [])
+
+        field_map = {}
+        for field_def in field_defs:
+            field_name = field_def.get("name", "")
+            if not field_name:
+                continue
+
+            # Extract base name by removing suffix (everything after $)
+            if "$" in field_name:
+                base_name = field_name.split("$")[0]
+            else:
+                base_name = field_name
+
+            # Map base name to actual field name
+            field_map[base_name] = field_name
+
+        return field_map
+    except APIException:
+        return {}
 
 
 def with_retries(fn: Callable[[], any], *, tries: int = 3, backoff: float = 0.5):
