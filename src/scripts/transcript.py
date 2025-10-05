@@ -50,17 +50,27 @@ def get_title(video_url):
 def get_transcript_with_retry(video_id, lang="en", max_retries=10, base_sleep=0.5):
     """Get transcript with retry logic"""
 
+    api = YouTubeTranscriptApi()
+
     for attempt in range(max_retries):
         try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[lang, "en", "en-US"])
-            return " ".join([x["text"] for x in transcript])
+            # List available transcripts
+            transcripts = api.list(video_id)
+            # Find transcript in preferred languages
+            transcript = transcripts.find_transcript([lang, "en", "en-US"])
+            # Fetch the transcript data
+            data = transcript.fetch()
+            # Extract text from all snippets
+            return " ".join([snippet.text for snippet in data])
         except (TranscriptsDisabled, NoTranscriptFound):
             try:
-                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                first = next(iter(transcript_list), None)
-                if first:
-                    transcript = first.fetch()
-                    return " ".join([x["text"] for x in transcript])
+                # Try to find any available transcript
+                transcripts = api.list(video_id)
+                # Get the first available transcript
+                transcript = next(iter(transcripts), None)
+                if transcript:
+                    data = transcript.fetch()
+                    return " ".join([snippet.text for snippet in data])
                 return "(Transcript unavailable or disabled)"
             except Exception:
                 if attempt < max_retries - 1:
