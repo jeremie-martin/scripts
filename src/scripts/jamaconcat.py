@@ -2,7 +2,7 @@
 """
 Script to download generic Jama items by document key (or all items in a folder detected by key prefix),
 fetch raw HTML description, and output each item's title and description,
-optionally copying to the clipboard.
+optionally cleaning HTML, converting to Markdown, and copying to the clipboard.
 
 Usage:
     python your_script.py [--recursive] [--version] JAMA_KEY [JAMA_KEY ...]
@@ -17,16 +17,25 @@ import sys
 import pyperclip
 
 from scripts.jama.common import (
+    clean_html_content,
     expand_keys,
     find_field_key,
     get_item_id,
+    html_to_markdown,
     jama_url_for_item,
     load_jama,
     load_keys_from_file_or_args,
 )
 
 
-def fetch_item(jama, document_key: str, fetch_version: bool = False) -> str | None:
+def fetch_item(
+    jama,
+    document_key: str,
+    *,
+    fetch_version: bool = False,
+    clean_html_output: bool = False,
+    output_markdown: bool = False,
+) -> str | None:
     """
     Download a generic item from Jama and return formatted string:
 
@@ -54,6 +63,11 @@ def fetch_item(jama, document_key: str, fetch_version: bool = False) -> str | No
     desc_key = find_field_key(fields, "description")
     description_html = fields.get(desc_key, "") if desc_key else ""
 
+    if clean_html_output or output_markdown:
+        description_html = clean_html_content(description_html)
+    if output_markdown:
+        description_html = html_to_markdown(description_html, clean=False)
+
     print("Processing item:", document_key)
 
     # optionally fetch version metadata
@@ -72,11 +86,15 @@ def fetch_item(jama, document_key: str, fetch_version: bool = False) -> str | No
 
     url = jama_url_for_item(item_id)
 
+    description_label = "Document Description"
+    if output_markdown:
+        description_label += " (Markdown)"
+
     return (
         f"Document Key: {document_key}{version_suffix}\n"
         f"Document URL: {url}\n"
         f"Document Title: {title}\n"
-        f"Document Description:\n{description_html}\n"
+        f"{description_label}:\n{description_html}\n"
     )
 
 
@@ -94,6 +112,16 @@ def main():
         dest="fetch_version",
         action="store_true",
         help="Fetch and append the Jama item version to each document key.",
+    )
+    parser.add_argument(
+        "--clean-html",
+        action="store_true",
+        help="Strip inline styles and span wrappers from item descriptions before output.",
+    )
+    parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Output item descriptions as Markdown (implies --clean-html).",
     )
     parser.add_argument(
         "keys",
@@ -134,7 +162,13 @@ def main():
 
     outputs: list[str] = []
     for doc_key in document_keys:
-        result = fetch_item(jama, doc_key, args.fetch_version)
+        result = fetch_item(
+            jama,
+            doc_key,
+            fetch_version=args.fetch_version,
+            clean_html_output=args.clean_html or args.markdown,
+            output_markdown=args.markdown,
+        )
         if result:
             outputs.append(result)
 

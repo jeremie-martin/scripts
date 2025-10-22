@@ -15,20 +15,7 @@ Options:
 import argparse
 import sys
 
-from bs4 import BeautifulSoup
-
-from scripts.jama.common import expand_keys, find_field_key, get_item_id, load_jama, with_retries
-
-
-# ———————————————— HTML Cleaning ————————————————
-def clean_html(html: str) -> str:
-    """Remove all style attrs and unwrap <span> tags, preserve &nbsp;."""
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup.find_all(attrs={"style": True}):
-        del tag["style"]
-    for span in soup.find_all("span"):
-        span.unwrap()
-    return str(soup).replace("\xa0", "&nbsp;")
+from scripts.jama.common import clean_html_content, expand_keys, find_field_key, get_item_id, load_jama, with_retries
 
 
 def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
@@ -51,7 +38,7 @@ def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
     title = fields.get("name", doc_key).strip()
     desc_key = find_field_key(fields, "description")
     raw_html = fields.get(desc_key, "") if desc_key else ""
-    cleaned_html = clean_html(raw_html)
+    cleaned_html = clean_html_content(raw_html)
 
     output = [f"Document Key: {doc_key}", f"Document Title: {title}", "Old HTML:", raw_html, "New HTML:", cleaned_html]
 

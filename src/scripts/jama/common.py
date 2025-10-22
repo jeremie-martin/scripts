@@ -8,10 +8,13 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Any
 
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from markdownify import markdownify as _markdownify
 from py_jama_rest_client.client import APIException, JamaClient
 
 __all__ = [
+    "clean_html_content",
     "collect_keys_from_folder",
     "expand_container_by_id",
     "expand_keys",
@@ -21,6 +24,7 @@ __all__ = [
     "get_item_id",
     "get_item_id_cached",
     "get_item_type_info_cached",
+    "html_to_markdown",
     "is_container_stub",
     "jama_url_for_item",
     "load_jama",
@@ -90,6 +94,25 @@ def get_item_type_info_cached(host: str, client_id: str, item_type_id: int) -> d
         return result or {}
     except APIException:
         return {}
+
+
+def clean_html_content(html: str) -> str:
+    """Strip inline styles and span wrappers while preserving non-breaking spaces."""
+    if not html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(attrs={"style": True}):
+        del tag["style"]
+    for span in soup.find_all("span"):
+        span.unwrap()
+    return str(soup).replace("\xa0", "&nbsp;")
+
+
+def html_to_markdown(html: str, *, clean: bool = True) -> str:
+    """Convert HTML to Markdown, optionally cleaning first."""
+    source = clean_html_content(html) if clean else html
+    # markdownify returns str; ensure consistent whitespace trimming
+    return _markdownify(source or "").strip()
 
 
 def _looks_like_container_type(type_info: dict[str, Any]) -> bool:
