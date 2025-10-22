@@ -17,13 +17,7 @@ import sys
 
 from bs4 import BeautifulSoup
 
-from scripts.jama.common import (
-    collect_keys_from_folder,
-    find_field_key,
-    get_item_id,
-    load_jama,
-    with_retries,
-)
+from scripts.jama.common import expand_keys, find_field_key, get_item_id, load_jama, with_retries
 
 
 # ———————————————— HTML Cleaning ————————————————
@@ -89,20 +83,21 @@ def main():
     except Exception as e:
         sys.exit(f"Error: {e}")
 
-    doc_keys: list[str] = []
-    for key in args.keys:
-        if "FLD" in key.upper():
-            fid = get_item_id(jama, key)
-            if not fid:
-                print(f"Error: folder '{key}' not found", file=sys.stderr)
-                continue
-            found = collect_keys_from_folder(jama, fid, recursive=args.recursive)
-            if not found:
-                print(f"No items in folder '{key}'", file=sys.stderr)
-            else:
-                doc_keys.extend(found)
-        else:
-            doc_keys.append(key)
+    def handle_missing(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "item"
+        print(f"Error: {label} '{key}' not found", file=sys.stderr)
+
+    def handle_empty(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "container"
+        print(f"No items in {label} '{key}'", file=sys.stderr)
+
+    doc_keys = expand_keys(
+        jama,
+        args.keys,
+        recursive=args.recursive,
+        on_missing=handle_missing,
+        on_empty_container=handle_empty,
+    )
 
     if not doc_keys:
         sys.exit(1)

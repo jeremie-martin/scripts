@@ -6,12 +6,11 @@ Handles both individual items and folders (with optional recursive traversal).
 """
 
 import argparse
-import os
 import sys
 
 import pyperclip
 
-from scripts.jama.common import collect_keys_from_folder, get_item_id, load_jama
+from scripts.jama.common import expand_keys, get_item_id, load_jama, load_keys_from_file_or_args
 
 
 def fetch_fields(jama_client, document_key: str) -> str | None:
@@ -67,31 +66,25 @@ def main():
     except Exception as e:
         sys.exit(f"Error: {e}")
 
-    # Collect document keys, expanding folders if requested
-    document_keys: list[str] = []
-    # if args.keys is a text file which exists, just loads all the keys from the text file (either absolute or relative paths)
-    if os.path.isfile(args.keys[0]):
-        with open(args.keys[0]) as f:
-            keys = [line.strip() for line in f if line.strip()]
-    else:
-        keys = args.keys
+    def handle_missing(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "item"
+        print(
+            f"Error: Could not find {label} with document key '{key}'",
+            file=sys.stderr,
+        )
 
-    for key in keys:
-        if "FLD" in key.upper():
-            folder_id = get_item_id(jama, key)
-            if not folder_id:
-                print(
-                    f"Error: Could not find folder with document key '{key}'",
-                    file=sys.stderr,
-                )
-                continue
-            found = collect_keys_from_folder(jama, folder_id, recursive=args.recursive)
-            if not found:
-                print(f"No items found in folder '{key}'.", file=sys.stderr)
-            else:
-                document_keys.extend(found)
-        else:
-            document_keys.append(key)
+    def handle_empty(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "container"
+        print(f"No items found in {label} '{key}'.", file=sys.stderr)
+
+    keys = load_keys_from_file_or_args(args.keys)
+    document_keys = expand_keys(
+        jama,
+        keys,
+        recursive=args.recursive,
+        on_missing=handle_missing,
+        on_empty_container=handle_empty,
+    )
 
     if not document_keys:
         sys.exit(1)

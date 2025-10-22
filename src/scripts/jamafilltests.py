@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-import json
 import os
 import sys
 
-from scripts.jama.common import (
-    collect_keys_from_folder,
-    find_field_key,
-    get_field_names_from_schema,
-    get_item_id,
-    load_jama,
-)
+from scripts.jama.common import expand_keys, find_field_key, get_field_names_from_schema, get_item_id, load_jama
 
 
 def update_test_fields(jama_client, doc_id: str):
@@ -134,21 +127,21 @@ def main():
         parser.print_usage()
         sys.exit(1)
 
-    # Resolve folder keys into document keys
-    document_keys: list[str] = []
-    for key in input_ids:
-        if "FLD" in key.upper():
-            folder_id = get_item_id(jama, key)
-            if not folder_id:
-                print(f"Error: Could not find folder with document key '{key}'", file=sys.stderr)
-                continue
-            found = collect_keys_from_folder(jama, folder_id, recursive=args.recursive)
-            if not found:
-                print(f"No items found in folder '{key}'.", file=sys.stderr)
-            else:
-                document_keys.extend(found)
-        else:
-            document_keys.append(key)
+    def handle_missing(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "item"
+        print(f"Error: Could not find {label} with document key '{key}'", file=sys.stderr)
+
+    def handle_empty(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "container"
+        print(f"No items found in {label} '{key}'.", file=sys.stderr)
+
+    document_keys = expand_keys(
+        jama,
+        input_ids,
+        recursive=args.recursive,
+        on_missing=handle_missing,
+        on_empty_container=handle_empty,
+    )
 
     if not document_keys:
         sys.exit(1)

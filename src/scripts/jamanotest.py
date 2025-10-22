@@ -17,7 +17,7 @@ import sys
 
 from py_jama_rest_client.client import APIException
 
-from scripts.jama.common import collect_keys_from_folder, get_item_id, load_jama
+from scripts.jama.common import expand_keys, get_item_id, load_jama
 
 
 def get_downstream_coverage(jama, item_id: int) -> list[str]:
@@ -71,20 +71,21 @@ def main():
         print(f"Jama auth error: {e}", file=sys.stderr)
         return 2
 
-    all_keys: list[str] = []
-    for key in args.keys:
-        if "FLD" in key.upper():
-            fid = get_item_id(jama, key)
-            if fid:
-                found = collect_keys_from_folder(jama, fid, recursive=args.recursive)
-                if not found:
-                    print(f"No items in folder '{key}'")
-                else:
-                    all_keys.extend(found)
-            else:
-                print(f"Error: folder '{key}' not found.")
-        else:
-            all_keys.append(key)
+    def handle_missing(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "item"
+        print(f"Error: {label} '{key}' not found.")
+
+    def handle_empty(key: str) -> None:
+        label = "folder" if "FLD" in key.upper() else "container"
+        print(f"No items in {label} '{key}'")
+
+    all_keys = expand_keys(
+        jama,
+        args.keys,
+        recursive=args.recursive,
+        on_missing=handle_missing,
+        on_empty_container=handle_empty,
+    )
 
     if not all_keys:
         sys.exit(1)
