@@ -62,13 +62,12 @@ def fetch_item(
     title = fields.get("name", document_key).strip()
     desc_key = find_field_key(fields, "description")
     description_html = fields.get(desc_key, "") if desc_key else ""
+    project_id = item.get("project", {})
 
-    if clean_html_output or output_markdown:
+    if clean_html_output:
         description_html = clean_html_content(description_html)
     if output_markdown:
         description_html = html_to_markdown(description_html, clean=False)
-
-    print("Processing item:", document_key)
 
     # optionally fetch version metadata
     version_suffix = ""
@@ -84,11 +83,14 @@ def fetch_item(
             latest = 1
         version_suffix = f"v{latest}"
 
-    url = jama_url_for_item(item_id)
+    url = jama_url_for_item(item_id, project_id)
+
+    if output_markdown:
+        description_html = clean_html_content(description_html)
+        description_md = html_to_markdown(description_html, clean=False).strip()
+        return f"[[{document_key}] **{title}**]({url})\n\n{description_md}\n\n---\n"
 
     description_label = "Document Description"
-    if output_markdown:
-        description_label += " (Markdown)"
 
     return (
         f"Document Key: {document_key}{version_suffix}\n"

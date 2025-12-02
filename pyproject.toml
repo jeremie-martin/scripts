@@ -12,6 +12,9 @@ dependencies = [
   "yt-dlp>=2025.8.27",
   "py-jama-rest-client>=1.17.1",
   "markdownify>=1.2.0",
+  "bs4>=0.0.2",
+  "pathspec>=0.12.1",
+  "tomli>=2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +34,7 @@ transcript = "scripts.transcript:main"
 ffcut = "scripts.ffcut:main"
 gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
+clipmedia = "scripts.clipmedia:app"
 # jama tools (stay discrete *and* available via `scripts jama …`)
 jamaclean = "scripts.jamaclean:main"
 jamaconcat = "scripts.jamaconcat:main"
