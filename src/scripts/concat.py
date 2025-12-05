@@ -504,6 +504,11 @@ def format_tree_output(files: List[str], config: Config):
         format_list_output(files, config)
         return
     
+    from rich.columns import Columns
+    from rich.panel import Panel
+    from rich.console import Group
+    from rich import box
+    
     console = Console()
     
     # Build tree structure
@@ -538,18 +543,6 @@ def format_tree_output(files: List[str], config: Config):
                 if part not in current:
                     current[part] = {"_type": "dir"}
                 current = current[part]
-    
-    # Find max filename length in each directory for alignment
-    def get_max_name_length(node_dict):
-        max_len = 0
-        for name, data in node_dict.items():
-            if name.startswith("_"):
-                continue
-            if data.get("_type") == "file":
-                max_len = max(max_len, len(name))
-            elif isinstance(data, dict):
-                max_len = max(max_len, get_max_name_length(data))
-        return max_len
     
     # Render tree with percentages
     def build_tree(node_dict, parent_tree=None):
@@ -595,10 +588,8 @@ def format_tree_output(files: List[str], config: Config):
         root = Tree("[bold blue].[/bold blue]")
         build_tree(tree_data, root)
     
-    console.print(root)
-    console.print(f"\n[bold green]TOTAL:[/bold green] {total_lines:,}L  {total_chars:,}C  in {len(files)} files")
-    
-    # Add top 10 contributors summary
+    # Build top contributors panel
+    top_contributors = []
     if len(files) > 0:
         # Sort files by character count (descending)
         sorted_files = sorted(
@@ -608,7 +599,8 @@ def format_tree_output(files: List[str], config: Config):
             reverse=True
         )[:10]
         
-        console.print(f"\n[bold cyan]Top {min(10, len(files))} Contributors by Size:[/bold cyan]")
+        top_contributors.append(Text(f"Top {min(10, len(files))} Contributors", style="bold cyan"))
+        top_contributors.append(Text())  # Empty line
         
         # Find max path length for alignment
         max_path_len = max(len(os.path.relpath(fp)) for fp, _, _ in sorted_files)
@@ -619,13 +611,45 @@ def format_tree_output(files: List[str], config: Config):
             pct = (chars / total_chars * 100) if total_chars > 0 else 0
             
             # Format with minimal spacing
-            path_display = Text(f"  {rel_path}", style="white")
+            path_display = Text(f"{rel_path}", style="white")
             padding = " " * (max_path_len - len(rel_path) + 2)
             path_display.append(padding)
             path_display.append(f"{lines:>6,}L  ", style="dim yellow")
             path_display.append(f"{chars:>9,}C  ", style="dim green")
             path_display.append(f"{pct:>5.1f}%", style="bold magenta")
-            console.print(path_display)
+            top_contributors.append(path_display)
+    
+    # Create contributors panel
+    contributors_group = Group(*top_contributors)
+    contributors_panel = Panel(
+        contributors_group,
+        box=box.ROUNDED,
+        border_style="dim",
+        padding=(0, 1)
+    )
+    
+    # Try to display side-by-side if terminal is wide enough
+    terminal_width = console.width
+    
+    # Estimate tree width by rendering it
+    with console.capture() as capture:
+        console.print(root)
+    tree_output = capture.get()
+    tree_width = max(len(line) for line in tree_output.splitlines()) if tree_output else 0
+    
+    # Minimum width needed for contributors (roughly 45-50 chars)
+    min_contributors_width = 50
+    
+    if terminal_width >= tree_width + min_contributors_width + 5:
+        # Wide enough - display side by side
+        console.print(Columns([root, contributors_panel], equal=False, expand=False))
+    else:
+        # Not enough space - display vertically
+        console.print(root)
+        console.print()
+        console.print(contributors_panel)
+    
+    console.print(f"\n[bold green]TOTAL:[/bold green] {total_lines:,}L  {total_chars:,}C  in {len(files)} files")
 
 
 def format_list_output(files: List[str], config: Config):
