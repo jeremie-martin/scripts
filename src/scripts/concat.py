@@ -352,6 +352,7 @@ def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
         base += ["-E", pat]
     
     files = set()
+    exclude_matcher = PatternMatcher(excludes) if excludes else None
     dirs, globs, files_given = [], [], []
     
     for it in inputs:
@@ -367,6 +368,8 @@ def gather_with_fd(inputs, excludes, use_gitignore, verbose=False):
     
     # Explicit files
     for f in files_given:
+        if exclude_matcher and exclude_matcher.matches(f):
+            continue
         files.add(os.path.abspath(f))
     
     # Directories
@@ -758,10 +761,11 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s src/              # Concatenate all files in src/
-  %(prog)s --pretty src/     # Show tree view with stats
-  %(prog)s -e "*.txt" .      # Exclude txt files
-  %(prog)s --terminal src/   # Print to terminal instead of clipboard
+  %(prog)s src/                        # Concatenate all files in src/
+  %(prog)s --pretty src/               # Show tree view with stats
+  %(prog)s -e "*.txt" "*.log" .        # Exclude multiple patterns
+  %(prog)s -e file1 file2 -e "*.tmp" . # Mix single and multiple -e flags
+  %(prog)s --terminal src/             # Print to terminal instead of clipboard
 
 Config files:
   Global: ~/.config/concat/config.toml
@@ -794,15 +798,17 @@ Config files:
     # Pattern options
     parser.add_argument(
         "-e", "--exclude",
-        action="append",
+        action="extend",
+        nargs="+",
         default=[],
-        help="Exclude patterns (gitignore-style); repeatable",
+        help="Exclude patterns (gitignore-style); can specify multiple patterns",
     )
     parser.add_argument(
         "-i", "--include",
-        action="append",
+        action="extend",
+        nargs="+",
         default=[],
-        help="Include patterns (gitignore-style); repeatable",
+        help="Include patterns (gitignore-style); can specify multiple patterns",
     )
     parser.add_argument(
         "-g", "--gitignore",
