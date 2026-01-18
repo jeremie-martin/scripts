@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pyperclip
 
-from scripts.jama.common import get_item_id, jama_url_for_item, load_jama
+from scripts.jama.common import expand_keys, get_item_id, jama_url_for_item, load_jama, load_keys_from_file_or_args
 
 DB_DIR = Path.home() / ".local" / "share" / "jamafetch"
 DB_FILE = DB_DIR / "item_types.json"
@@ -212,18 +212,12 @@ def format_item_output(
     """
     fields = item.get("fields", {})
     doc_key = item.get("documentKey", "")
-    global_id = item.get("globalId", "")
+    item.get("globalId", "")
     item_id = item.get("id")
     project_id = item.get("project", {})
 
-    lines = [f"# {doc_key}"]
-
     name = fields.get("name", "")
-    if name:
-        lines.append(f"{name}")
-
-    if global_id:
-        lines.append(f"Global ID: {global_id}")
+    lines = [f"# {doc_key}: {name}"] if name else [f"# {doc_key}"]
 
     if include_url and item_id:
         url = jama_url_for_item(item_id, project_id.get("id") if isinstance(project_id, dict) else project_id)
@@ -234,7 +228,7 @@ def format_item_output(
     seen_fields = set()
 
     for field_input in fields_to_show:
-        if field_input in ["name", "documentKey", "globalId"]:
+        if field_input in ["name", "documentKey"]:
             continue
 
         actual_field_name = resolve_field_name(field_input, item_fields)
@@ -255,7 +249,7 @@ def format_item_output(
 
         if resolved_value:
             display_name = field_info.get("base_name", actual_field_name)
-            lines.append(f"{display_name}:")
+            lines.append(f"## {display_name}")
             lines.append(f"{resolved_value}")
             lines.append("")
 
@@ -383,13 +377,30 @@ def main():
         print(f"Jama auth error: {e}", file=sys.stderr)
         return 2
 
+    def handle_missing(key: str) -> None:
+        print(f"Error: Could not find item with document key '{key}'", file=sys.stderr)
+
+    def handle_empty(key: str) -> None:
+        print(f"No items found in container '{key}'.", file=sys.stderr)
+
+    keys = load_keys_from_file_or_args(args.keys)
+    document_keys = expand_keys(
+        jama,
+        keys,
+        on_missing=handle_missing,
+        on_empty_container=handle_empty,
+    )
+
+    if not document_keys:
+        sys.exit(1)
+
     fields_to_show = None
     if args.fields:
         fields_to_show = [f.strip() for f in args.fields.split(",") if f.strip()]
 
     outputs = fetch_items(
         jama,
-        args.keys,
+        document_keys,
         fields_to_show=fields_to_show,
         include_url=args.url,
         show_full=args.full,
