@@ -524,8 +524,8 @@ def main():
     parser.add_argument(
         "--format",
         choices=["tree", "path", "nested", "json", "flat"],
-        default="flat",
-        help="Output format: tree (ASCII tree), path (path prefix), nested (sections), json (structured), flat (default)",
+        default="path",
+        help="Output format: tree (ASCII tree), path (default, path prefix), nested (sections), json (structured), flat",
     )
     parser.add_argument(
         "--no-clipboard",
