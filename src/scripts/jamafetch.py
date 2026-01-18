@@ -53,10 +53,14 @@ class ItemNode:
     path: list[str]
     is_container: bool
     children: list["ItemNode"]
+    container_path_name: str | None = None
+    parent_container_name: str | None = None
 
     @property
     def path_str(self) -> str:
         """Get path as a string."""
+        if not self.path:
+            return ""
         return " / ".join(self.path)
 
 
@@ -287,11 +291,25 @@ def build_tree(
         elif child_doc_key:
             child_name = child.get("name", child_doc_key)
             child_nodes.append(
-                ItemNode(doc_key=child_doc_key, name=child_name, item_id=child_id or 0, path=current_path, is_container=False, children=[])
+                ItemNode(
+                    doc_key=child_doc_key,
+                    name=child_name,
+                    item_id=child_id or 0,
+                    path=current_path,
+                    is_container=False,
+                    children=[],
+                    parent_container_name=container_name,
+                )
             )
 
     return ItemNode(
-        doc_key=container_doc_key, name=container_name, item_id=container_id, path=path, is_container=True, children=child_nodes
+        doc_key=container_doc_key,
+        name=container_name,
+        item_id=container_id,
+        path=path,
+        is_container=True,
+        children=child_nodes,
+        container_path_name=container_name,
     )
 
 
@@ -363,7 +381,10 @@ def format_tree(
                         if field_name not in ["doc_key", "name"]:
                             lines.append(f"{'  ' * (indent + 1)}    {field_name}: {str(field_value)[:80]}")
                 elif format_type == "path":
-                    path_prefix = f"[{tree.path_str}] " if tree.path else ""
+                    path_to_show = tree.path_str
+                    if tree.parent_container_name and not path_to_show:
+                        path_to_show = tree.parent_container_name
+                    path_prefix = f"[{path_to_show}] " if path_to_show else ""
                     lines.append(f"{path_prefix}{tree.doc_key}: {item_data.get('name', '')}")
                     for field_name, field_value in item_data.items():
                         if field_name not in ["doc_key", "name"]:
@@ -432,9 +453,10 @@ def fetch_items_tree(
             continue
 
         item = jama.get_item(item_id)
+        is_container = is_container_stub(jama, item)
 
-        if is_container_stub(jama, item):
-            container_name = item.get("name") or input_key
+        if is_container:
+            container_name = item.get("name") or item.get("fields", {}).get("name") or input_key
             tree = build_tree(jama, item_id, container_name, input_key, [])
             tree_lines = format_tree(jama, tree, fields_to_show, include_url, show_full, format_type)
             all_lines.extend(tree_lines)
