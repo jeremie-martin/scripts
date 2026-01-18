@@ -61,8 +61,7 @@ def check_coverage_for_key(jama, doc_key: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Check test coverage for Jama items by downstream links.")
-    parser.add_argument("-r", "--recursive", action="store_true", help="Recursively expand folder keys.")
-    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY", help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD-XYZ)")
+    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY", help="Jama document or container key (folders/sets/components).")
     args = parser.parse_args()
 
     try:
@@ -72,17 +71,14 @@ def main():
         return 2
 
     def handle_missing(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "item"
-        print(f"Error: {label} '{key}' not found.")
+        print(f"Error: item '{key}' not found.")
 
     def handle_empty(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "container"
-        print(f"No items in {label} '{key}'")
+        print(f"No items in container '{key}'")
 
     all_keys = expand_keys(
         jama,
         args.keys,
-        recursive=args.recursive,
         on_missing=handle_missing,
         on_empty_container=handle_empty,
     )

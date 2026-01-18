@@ -103,12 +103,6 @@ def fetch_item(
 def main():
     parser = argparse.ArgumentParser(description="Download and output generic Jama items with raw HTML descriptions.")
     parser.add_argument(
-        "-r",
-        "--recursive",
-        action="store_true",
-        help="Recursively fetch items in subfolders for folder keys.",
-    )
-    parser.add_argument(
         "-v",
         "--version",
         dest="fetch_version",
@@ -129,7 +123,7 @@ def main():
         "keys",
         nargs="+",
         metavar="JAMA_KEY",
-        help="One or more Jama document keys (e.g., ABSD-SWVER-257) or folder keys containing 'FLD'.",
+        help="One or more Jama document keys (e.g., ABSD-SWVER-257) or container keys (folders/sets/components).",
     )
     args = parser.parse_args()
 
@@ -140,21 +134,18 @@ def main():
         return 2
 
     def handle_missing(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "item"
         print(
-            f"Error: Could not find {label} with document key '{key}'",
+            f"Error: Could not find item with document key '{key}'",
             file=sys.stderr,
         )
 
     def handle_empty(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "container"
-        print(f"No items found in {label} '{key}'.", file=sys.stderr)
+        print(f"No items found in container '{key}'.", file=sys.stderr)
 
     keys = load_keys_from_file_or_args(args.keys)
     document_keys = expand_keys(
         jama,
         keys,
-        recursive=args.recursive,
         on_missing=handle_missing,
         on_empty_container=handle_empty,
     )

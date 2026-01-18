@@ -112,16 +112,16 @@ def html_to_markdown(html: str, *, clean: bool = True) -> str:
     """Convert HTML to Markdown, optionally cleaning first."""
     source = clean_html_content(html) if clean else html
     # markdownify returns str; ensure consistent whitespace trimming
-    return _markdownify(source or "").strip()
+    return _markdownify(source or "", escape_asterisks=False, escape_underscores=False, escape_misc=False).strip()
 
 
 def _looks_like_container_type(type_info: dict[str, Any]) -> bool:
     """Decide container by Jama item type metadata."""
     type_key = str(type_info.get("typeKey", "")).upper()
-    if type_key in {"FOLDER", "SET", "COMPONENT", "PROJECT"}:
+    if type_key in {"FOLDER", "SET", "COMPONENT", "PROJECT", "CMP"}:
         return True
     name = str(type_info.get("name", "")).lower()
-    return any(token in name for token in ("folder", "set", "component", "project"))
+    return any(token in name for token in ("folder", "set", "component", "project", "cmp"))
 
 
 def is_container_stub(jama: JamaClient, stub: dict[str, Any]) -> bool:
@@ -137,7 +137,7 @@ def is_container_stub(jama: JamaClient, stub: dict[str, Any]) -> bool:
 
     if isinstance(item_type_raw, str):
         lowered = item_type_raw.lower()
-        if any(tok in lowered for tok in ("folder", "set", "component", "project", "container")):
+        if any(tok in lowered for tok in ("folder", "set", "component", "project", "container", "cmp")):
             return True
 
     # Jama SDK sometimes provides a dict with type info
@@ -168,10 +168,9 @@ def is_container_stub(jama: JamaClient, stub: dict[str, Any]) -> bool:
 def expand_container_by_id(
     jama: JamaClient,
     container_id: int,
-    recursive: bool,
     seen_ids: set[int] | None = None,
 ) -> list[str]:
-    """Expand a container item id into non-container document keys."""
+    """Expand a container item id into non-container document keys (always recursive)."""
     if seen_ids is None:
         seen_ids = set()
 
@@ -191,30 +190,24 @@ def expand_container_by_id(
         child_id = child.get("id")
         doc_key = get_document_key_from_stub(child)
         if is_container_stub(jama, child):
-            if not child_id:
-                continue
-            if child_id in seen_ids:
-                continue
-            if recursive:
-                expanded.extend(expand_container_by_id(jama, child_id, recursive, seen_ids))
-            else:
-                continue
-        else:
-            if doc_key:
-                expanded.append(doc_key)
+            if child_id and child_id not in seen_ids:
+                expanded.extend(expand_container_by_id(jama, child_id, seen_ids))
+            continue
+        if doc_key:
+            expanded.append(doc_key)
     return expanded
 
 
 def expand_keys(
     jama: JamaClient,
     keys: list[str],
-    recursive: bool = False,
     *,
     on_missing: Callable[[str], None] | None = None,
     on_empty_container: Callable[[str], None] | None = None,
 ) -> list[str]:
     """
     Resolve a mixed list of document or container keys into concrete document keys.
+    Container keys (folders, sets, components) are automatically expanded recursively.
     Deduplicates while preserving order. Optionally invoke ``on_missing`` for keys that
     cannot be resolved to an item id and ``on_empty_container`` for containers that
     expand to no leaf items.
@@ -239,7 +232,7 @@ def expand_keys(
             continue
 
         if is_container_stub(jama, item):
-            expanded = expand_container_by_id(jama, item_id, recursive, seen_container_ids)
+            expanded = expand_container_by_id(jama, item_id, seen_container_ids)
             if not expanded and on_empty_container:
                 on_empty_container(key)
             for doc_key in expanded:
@@ -268,10 +261,10 @@ def load_keys_from_file_or_args(args_list: list[str]) -> list[str]:
 def collect_keys_from_folder(
     jama: JamaClient,
     folder_id: int,
-    recursive: bool = False,
     seen: set[int] | None = None,
 ) -> list[str]:
-    return expand_container_by_id(jama, folder_id, recursive, seen)
+    """Alias for expand_container_by_id (always recursive)."""
+    return expand_container_by_id(jama, folder_id, seen)
 
 
 def rate_limit(seconds: float = 0.1):
@@ -329,11 +322,27 @@ def with_retries(fn: Callable[[], any], *, tries: int = 3, backoff: float = 0.5)
             time.sleep(backoff * (2**i))
 
 
-def jama_url_for_item(item_id: int) -> str:
+def jama_url_for_item(item_id: int, project_id: int | None = None) -> str:
+    """
+    Construct a proper Jama Cloud item URL for use in Markdown links.
+
+    Example:
+        https://wyss-prod.jamacloud.com/perspective.req#/items/7501878?projectId=65
+    """
     host = os.getenv("JAMA_URL", "").rstrip("/")
     if not host:
-        return f"/perspective.req?docId={item_id}"
-    return f"{host}/perspective.req?docId={item_id}"
+        raise JamaEnvError("Missing JAMA_URL in environment")
+
+    # Default projectId fallback from environment if defined
+    if project_id is None:
+        try:
+            project_id = int(os.getenv("JAMA_PROJECT_ID", "0"))
+        except ValueError:
+            project_id = 0
+
+    if project_id:
+        return f"{host}/perspective.req#/items/{item_id}?projectId={project_id}"
+    return f"{host}/perspective.req#/items/{item_id}"
 
 
 def relationship_exists(jama: JamaClient, from_item_id: int, to_item_id: int) -> bool:

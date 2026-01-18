@@ -60,8 +60,7 @@ def fetch_and_update_item(jama_client, doc_key: str) -> str | None:
 # ———————————————— CLI Entrypoint ————————————————
 def main():
     parser = argparse.ArgumentParser(description="Fetch, clean, and update Jama HTML descriptions.")
-    parser.add_argument("-r", "--recursive", action="store_true", help="Recurse into folder keys.")
-    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY", help="Jama document or folder key (e.g. ABSD-SWVER-257 or FLD...).")
+    parser.add_argument("keys", nargs="+", metavar="JAMA_KEY", help="Jama document or container key (folders/sets/components).")
     args = parser.parse_args()
 
     # Load Jama client using shared helper
@@ -71,17 +70,14 @@ def main():
         sys.exit(f"Error: {e}")
 
     def handle_missing(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "item"
-        print(f"Error: {label} '{key}' not found", file=sys.stderr)
+        print(f"Error: item '{key}' not found", file=sys.stderr)
 
     def handle_empty(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "container"
-        print(f"No items in {label} '{key}'", file=sys.stderr)
+        print(f"No items in container '{key}'", file=sys.stderr)
 
     doc_keys = expand_keys(
         jama,
         args.keys,
-        recursive=args.recursive,
         on_missing=handle_missing,
         on_empty_container=handle_empty,
     )

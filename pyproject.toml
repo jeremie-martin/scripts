@@ -36,6 +36,7 @@ gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
 clipmedia = "scripts.clipmedia:app"
 # jama tools (stay discrete *and* available via `scripts jama …`)
+jamafetch = "scripts.jamafetch:main"
 jamaclean = "scripts.jamaclean:main"
 jamaconcat = "scripts.jamaconcat:main"
 jamaconcatfull = "scripts.jamaconcatfull:main"

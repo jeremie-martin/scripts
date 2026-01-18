@@ -105,9 +105,8 @@ def update_test_fields(jama_client, doc_id: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Update empty test fields for Jama items by document key or all items in a folder.")
-    parser.add_argument("-r", "--recursive", action="store_true", help="Recursively fetch items in subfolders for folder keys.")
-    parser.add_argument("ids", nargs="*", help="One or more Jama document keys or folder keys containing 'FLD'.")
+    parser = argparse.ArgumentParser(description="Update empty test fields for Jama items by document key or all items in a container.")
+    parser.add_argument("ids", nargs="*", help="One or more Jama document keys or container keys (folders/sets/components).")
     args = parser.parse_args()
 
     try:
@@ -128,17 +127,14 @@ def main():
         sys.exit(1)
 
     def handle_missing(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "item"
-        print(f"Error: Could not find {label} with document key '{key}'", file=sys.stderr)
+        print(f"Error: Could not find item with document key '{key}'", file=sys.stderr)
 
     def handle_empty(key: str) -> None:
-        label = "folder" if "FLD" in key.upper() else "container"
-        print(f"No items found in {label} '{key}'.", file=sys.stderr)
+        print(f"No items found in container '{key}'.", file=sys.stderr)
 
     document_keys = expand_keys(
         jama,
         input_ids,
-        recursive=args.recursive,
         on_missing=handle_missing,
         on_empty_container=handle_empty,
     )
