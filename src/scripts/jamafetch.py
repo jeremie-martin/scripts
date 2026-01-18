@@ -4,7 +4,9 @@ Unified Jama item fetching tool with configurable field selection and local cach
 """
 
 import argparse
+import datetime
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -306,6 +308,23 @@ def fetch_items(
     return outputs
 
 
+def get_output_filename(keys: list[str]) -> Path:
+    """
+    Generate output filename in /tmp based on first 5 keys and timestamp.
+
+    Args:
+        keys: List of document keys
+
+    Returns:
+        Path object for output file
+    """
+    first_keys = "_".join(keys[:5])
+    safe_keys = re.sub(r"[^a-zA-Z0-9_-]", "_", first_keys)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"jamafetch_{safe_keys}_{timestamp}.txt"
+    return Path("/tmp") / filename
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fetch Jama items with configurable field selection and local caching.",
@@ -412,6 +431,13 @@ def main():
     combined = ("\n" + "-" * 60 + "\n").join(outputs)
 
     print(combined)
+
+    output_file = get_output_filename(document_keys)
+    try:
+        output_file.write_text(combined)
+        print(f"\nOutput saved to: {output_file}")
+    except Exception as e:
+        print(f"\nFailed to save output file: {e}", file=sys.stderr)
 
     if not args.no_clipboard:
         try:
