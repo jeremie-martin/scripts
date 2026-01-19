@@ -284,7 +284,12 @@ def build_tree(
 
         if is_container_stub(jama, child):
             if child_id and child_id not in seen_ids:
-                child_name = child.get("name") or child.get("documentKey", "")
+                # Fetch the actual item to get the proper name from fields
+                try:
+                    child_item = jama.get_item(child_id)
+                    child_name = child_item.get("name") or child_item.get("fields", {}).get("name") or child.get("documentKey", "")
+                except Exception:
+                    child_name = child.get("documentKey", "")
                 child_doc_key = child_doc_key or child.get("documentKey", "")
                 sub_tree = build_tree(jama, child_id, child_name, child_doc_key, current_path, seen_ids)
                 child_nodes.append(sub_tree)
