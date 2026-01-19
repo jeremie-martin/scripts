@@ -31,6 +31,7 @@ __all__ = [
     "load_keys_from_file_or_args",
     "rate_limit",
     "relationship_exists",
+    "safe_copy_to_clipboard",
     "with_retries",
 ]
 
@@ -127,7 +128,23 @@ def _looks_like_container_type(type_info: dict[str, Any]) -> bool:
 def is_container_stub(jama: JamaClient, stub: dict[str, Any]) -> bool:
     """
     Decide if a child stub from get_item_children() represents a container.
+
+    This function uses cascading heuristics because Jama's API returns data inconsistently:
+    - itemType can be a string (e.g., "Folder")
+    - itemType can be a dict with typeKey and name
+    - itemType can be an int ID requiring lookup
+    - documentKey may be present or missing
+    - hasChildren flag may or may not be set
+
+    Each heuristic handles a different representation from the API.
     Heuristics adapted from gate_traceability.py.
+
+    Args:
+        jama: Jama client
+        stub: Child stub dictionary from get_item_children()
+
+    Returns:
+        True if the stub represents a container (folder/set/component), False otherwise
     """
     doc_key = get_document_key_from_stub(stub)
     if doc_key and "FLD" in doc_key.upper():
@@ -311,7 +328,7 @@ def get_field_names_from_schema(host: str, client_id: str, item_type_id: int) ->
         return {}
 
 
-def with_retries(fn: Callable[[], any], *, tries: int = 3, backoff: float = 0.5):
+def with_retries(fn: Callable[[], Any], *, tries: int = 3, backoff: float = 0.5):
     """Call a function with simple exponential backoff on APIException."""
     for i in range(tries):
         try:
@@ -359,3 +376,16 @@ def relationship_exists(jama: JamaClient, from_item_id: int, to_item_id: int) ->
     except APIException:
         return False
     return False
+
+
+def safe_copy_to_clipboard(text: str, message: str = "Output copied to clipboard.") -> None:
+    """Copy text to clipboard with error handling."""
+    import sys
+
+    import pyperclip
+
+    try:
+        pyperclip.copy(text)
+        print(message)
+    except Exception as e:
+        print(f"Failed to copy to clipboard: {e}", file=sys.stderr)

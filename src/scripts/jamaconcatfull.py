@@ -9,8 +9,6 @@ with optional HTML cleaning and Markdown conversion for string fields.
 import argparse
 import sys
 
-import pyperclip
-
 from scripts.jama.common import (
     clean_html_content,
     expand_keys,
@@ -18,6 +16,7 @@ from scripts.jama.common import (
     html_to_markdown,
     load_jama,
     load_keys_from_file_or_args,
+    safe_copy_to_clipboard,
 )
 
 
@@ -131,11 +130,7 @@ def main():
     print(combined)
 
     # Copy combined output to clipboard by default
-    try:
-        pyperclip.copy(combined)
-        print("\nCombined output has been copied to the clipboard.")
-    except Exception as e:
-        print(f"\nFailed to copy to clipboard: {e}", file=sys.stderr)
+    safe_copy_to_clipboard(combined, message="\nCombined output has been copied to the clipboard.")
 
 
 if __name__ == "__main__":

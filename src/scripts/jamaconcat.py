@@ -14,9 +14,8 @@ Options:
 import argparse
 import sys
 
-import pyperclip
-
 from scripts.jama.common import (
+    JamaEnvError,
     clean_html_content,
     expand_keys,
     find_field_key,
@@ -25,6 +24,7 @@ from scripts.jama.common import (
     jama_url_for_item,
     load_jama,
     load_keys_from_file_or_args,
+    safe_copy_to_clipboard,
 )
 
 
@@ -129,7 +129,7 @@ def main():
 
     try:
         jama = load_jama()
-    except Exception as e:
+    except (JamaEnvError, Exception) as e:
         print(f"Jama auth error: {e}", file=sys.stderr)
         return 2
 
@@ -173,11 +173,7 @@ def main():
     print(combined)
 
     # Copy combined output to clipboard by default
-    try:
-        pyperclip.copy(combined)
-        print("\nCombined output has been copied to the clipboard.")
-    except Exception as e:
-        print(f"\nFailed to copy to clipboard: {e}", file=sys.stderr)
+    safe_copy_to_clipboard(combined, message="\nCombined output has been copied to the clipboard.")
 
 
 if __name__ == "__main__":
