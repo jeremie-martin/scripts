@@ -214,7 +214,7 @@ def format_tree_recursive(
             item_type_id = item.get("itemType")
             if item_type_id:
                 item_fields = get_item_type_fields(jama, item_type_id, database)
-                fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or [])
+                fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or ["description"])
 
                 item_data = build_item_data(item, fields_to_display, item_fields, include_url)
                 item_data.path = tree.path_str if tree.path_str else None
@@ -271,7 +271,7 @@ def fetch_items_tree(
             item_type_id = item.get("itemType")
             if item_type_id:
                 item_fields = get_item_type_fields(jama, item_type_id, database)
-                fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or [])
+                fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or ["description"])
 
                 item_data = build_item_data(item, fields_to_display, item_fields, include_url)
                 item_lines = formatter.format_item(item_data)
