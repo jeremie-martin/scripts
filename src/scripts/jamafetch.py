@@ -188,7 +188,7 @@ def format_tree_recursive(
                 child_lines = format_tree_recursive(
                     jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent + 1, database
                 )
-                if child_lines and is_last and format_type == "tree" and child_lines:
+                if is_last and format_type == "tree" and child_lines:
                     child_lines[0] = child_lines[0].replace("├── ", "└── ", 1)
                 lines.extend(child_lines)
         elif format_type == "nested":
