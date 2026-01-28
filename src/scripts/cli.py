@@ -97,3 +97,27 @@ def jama_notest(ctx: typer.Context):
 @jama.command("tmp", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def jama_tmp(ctx: typer.Context):
     raise typer.Exit(_forward("jamatmp", ctx.args))
+
+
+@jama.command("fetch", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_fetch(ctx: typer.Context):
+    """Fetch Jama items (forwards to `jama fetch`)."""
+    raise typer.Exit(_forward("jama", ["fetch", *ctx.args]))
+
+
+@jama.command("update", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_update(ctx: typer.Context):
+    """Update Jama items (forwards to `jama update`)."""
+    raise typer.Exit(_forward("jama", ["update", *ctx.args]))
+
+
+@jama.command("create", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_create(ctx: typer.Context):
+    """Create Jama items (forwards to `jama create`)."""
+    raise typer.Exit(_forward("jama", ["create", *ctx.args]))
+
+
+@jama.command("db", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def jama_db(ctx: typer.Context):
+    """Manage Jama database (forwards to `jama db`)."""
+    raise typer.Exit(_forward("jama", ["db", *ctx.args]))

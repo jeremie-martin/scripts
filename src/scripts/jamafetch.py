@@ -4,7 +4,6 @@ Unified Jama item fetching tool with configurable field selection, local caching
 """
 
 import argparse
-import json
 import re
 import sys
 from datetime import datetime
@@ -17,6 +16,11 @@ from scripts.jama.common import (
     load_jama,
     safe_copy_to_clipboard,
 )
+from scripts.jama.database import (
+    DB_FILE,
+    get_item_type_fields,
+    load_database,
+)
 from scripts.jama.fields import (
     get_field_aliases_help,
     resolve_field_name,
@@ -24,84 +28,6 @@ from scripts.jama.fields import (
 )
 from scripts.jama.formatters import ItemData, get_formatter
 from scripts.jama.tree import ItemNode, build_tree
-
-DB_DIR = Path.home() / ".local" / "share" / "jamafetch"
-DB_FILE = DB_DIR / "item_types.json"
-
-
-def load_database() -> dict:
-    """Load item type database from disk."""
-    if DB_FILE.exists():
-        try:
-            with open(DB_FILE) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"Warning: Failed to load database ({e}), starting fresh", file=sys.stderr)
-    return {}
-
-
-def save_database(database: dict) -> None:
-    """Save item type database to disk."""
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    with open(DB_FILE, "w") as f:
-        json.dump(database, f, indent=2)
-
-
-def get_item_type_fields(jama, item_type_id: int, database: dict) -> dict:
-    """
-    Get field information for an item type, using database or fetching from Jama.
-    """
-    str_item_type_id = str(item_type_id)
-
-    if str_item_type_id in database:
-        return database[str_item_type_id]["fields"]
-
-    item_type = jama.get_item_type(item_type_id)
-    fields = item_type.get("fields", [])
-
-    field_info = {}
-    for field in fields:
-        field_name = field.get("name")
-        field_type = field.get("fieldType")
-        picklist = field.get("pickList")
-
-        if not field_name:
-            continue
-
-        field_data = {
-            "field_type": field_type,
-            "base_name": field_name.split("$")[0] if "$" in field_name else field_name,
-        }
-
-        if picklist:
-            picklist_id = picklist.get("id") if isinstance(picklist, dict) else picklist
-            if picklist_id:
-                field_data["picklist_id"] = picklist_id
-                try:
-                    options = jama.get_pick_list_options(picklist_id)
-                    enum_values = {}
-                    for opt in options:
-                        opt_id = opt.get("id")
-                        opt_name = opt.get("name")
-                        if opt_id is not None and opt_name:
-                            enum_values[str(opt_id)] = opt_name
-                    field_data["enum_values"] = enum_values
-                except Exception as e:
-                    print(f"Warning: Failed to fetch picklist options for {picklist_id}: {e}", file=sys.stderr)
-                    field_data.pop("picklist_id", None)
-
-        field_info[field_name] = field_data
-
-    database[str_item_type_id] = {
-        "item_type_name": item_type.get("name"),
-        "doc_key_prefix": "",
-        "fields": field_info,
-    }
-
-    save_database(database)
-    print(f"Updated database with item type {item_type_id}", file=sys.stderr)
-
-    return field_info
 
 
 def build_item_data(item: dict, fields_to_show: list[str], item_fields: dict, include_url: bool) -> ItemData:
@@ -345,12 +271,14 @@ def main():
 
     if args.list_db:
         database = load_database()
-        if not database:
+        item_types = database.get("item_types", {})
+        if not item_types:
             print("No item types in database")
             return 0
         print(f"Database: {DB_FILE}")
-        print(f"Total item types: {len(database)}\n")
-        for item_type_id, item_type_info in database.items():
+        print(f"Version: {database.get('version', 'unknown')}")
+        print(f"Total item types: {len(item_types)}\n")
+        for item_type_id, item_type_info in item_types.items():
             print(f"Item Type ID: {item_type_id}")
             print(f"  Name: {item_type_info.get('item_type_name', 'Unknown')}")
             print(f"  Prefix: {item_type_info.get('doc_key_prefix', 'Unknown')}")

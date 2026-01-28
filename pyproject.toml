@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Keep base install light; opt into features as needed
-jama = ["py-jama-rest-client>=1.17.1", "beautifulsoup4>=4.12.3"]
+jama = ["py-jama-rest-client>=1.17.1", "beautifulsoup4>=4.12.3", "mcp>=1.0.0"]
 media = [
   "youtube-transcript-api>=1.2.2",
   # keep flexible, yt-dlp updates frequently
@@ -36,6 +36,8 @@ gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
 clipmedia = "scripts.clipmedia:app"
 # jama tools (stay discrete *and* available via `scripts jama …`)
+jama = "scripts.jama_cli:main"
+jama-mcp = "scripts.jama_mcp:main"
 jamafetch = "scripts.jamafetch:main"
 jamaupdate = "scripts.jamaupdate:main"
 jamaclean = "scripts.jamaclean:main"
