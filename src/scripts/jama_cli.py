@@ -363,6 +363,112 @@ def db_path():
 # =============================================================================
 
 
+# =============================================================================
+# Links subcommands
+# =============================================================================
+
+
+@app.command("links")
+def get_links(
+    keys: Annotated[list[str], typer.Argument(help="Jama document keys to query")],
+    upstream: Annotated[bool, typer.Option("--upstream", "-u", help="Show only upstream links")] = False,
+    downstream: Annotated[bool, typer.Option("--downstream", "-d", help="Show only downstream links")] = False,
+    as_json: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+):
+    """
+    Get upstream and downstream links for Jama items.
+
+    Examples:
+        jama links ABC-SWVER-13              # Show all links
+        jama links ABC-SWVER-13 --upstream   # Only upstream links
+        jama links ABC-DI2-86 ABC-DI2-87     # Multiple items
+        jama links ABC-SWVER-13 --json       # JSON output
+    """
+    from scripts.jama.common import load_jama
+    from scripts.jama.links import format_links_json, format_links_table, get_item_links
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        typer.echo(f"Jama auth error: {e}", err=True)
+        raise typer.Exit(2) from None
+
+    # Determine what to show
+    show_upstream = upstream or not (upstream or downstream)
+    show_downstream = downstream or not (upstream or downstream)
+
+    links_list = []
+    for key in keys:
+        typer.echo(f"Fetching links for {key}...", err=True)
+        item_links = get_item_links(
+            jama,
+            key,
+            include_upstream=show_upstream,
+            include_downstream=show_downstream,
+        )
+        if item_links:
+            links_list.append(item_links)
+        else:
+            typer.echo(f"Warning: '{key}' not found", err=True)
+
+    if not links_list:
+        typer.echo("No items found.", err=True)
+        raise typer.Exit(1)
+
+    if as_json:
+        typer.echo(format_links_json(links_list))
+    else:
+        for i, links in enumerate(links_list):
+            if i > 0:
+                typer.echo("\n" + "-" * 60 + "\n")
+            typer.echo(format_links_table(links, show_upstream=show_upstream, show_downstream=show_downstream))
+
+
+@app.command("link")
+def create_link_cmd(
+    source: Annotated[str, typer.Argument(help="Source document key (the item you're linking FROM)")],
+    targets: Annotated[list[str], typer.Argument(help="Target document keys (items to link TO - become upstream)")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Preview without creating links")] = False,
+):
+    """
+    Create upstream links from source to targets.
+
+    Creates relationships where targets become upstream of source.
+    This is typically used to link test cases to requirements.
+
+    Examples:
+        jama link ABC-SWVER-13 ABC-DI2-86                    # Link test to requirement
+        jama link ABC-SWVER-13 ABC-DI2-86 ABC-DI2-87         # Multiple targets
+        jama link ABC-SWVER-13 ABC-DI2-86 --dry-run          # Preview
+    """
+    from scripts.jama.common import load_jama
+    from scripts.jama.links import create_links, print_create_results
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        typer.echo(f"Jama auth error: {e}", err=True)
+        raise typer.Exit(2) from None
+
+    typer.echo(f"Creating links from {source} to {len(targets)} target(s)...")
+    if dry_run:
+        typer.echo("[DRY RUN MODE - No changes will be made]")
+    typer.echo()
+
+    results = create_links(jama, source, targets, dry_run=dry_run)
+    print_create_results(results, dry_run=dry_run)
+
+    # Exit with error if any failed
+    errors = sum(1 for r in results if r["status"] == "error")
+    if errors > 0:
+        raise typer.Exit(1)
+
+
+# =============================================================================
+# Aliases subcommand
+# =============================================================================
+
+
 @app.command("aliases")
 def list_aliases():
     """List all field aliases."""
