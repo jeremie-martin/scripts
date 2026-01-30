@@ -8,9 +8,9 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from threading import Lock
 
-import pyperclip
 import yt_dlp
 from youtube_transcript_api import (
     NoTranscriptFound,
@@ -18,6 +18,9 @@ from youtube_transcript_api import (
     VideoUnavailable,
     YouTubeTranscriptApi,
 )
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
+from scripts.jama.common import copy_to_all_clipboards
 
 # Lock for thread-safe printing
 print_lock = Lock()
@@ -161,7 +164,7 @@ def main():
         print("\n" + "=" * 50)
         print(final_result)
     else:
-        pyperclip.copy(final_result)
+        copy_to_all_clipboards(final_result)
         print("\nOutput copied to clipboard.")
 
 
