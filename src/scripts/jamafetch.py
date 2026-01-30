@@ -26,11 +26,18 @@ from scripts.jama.fields import (
     resolve_field_name,
     resolve_field_value,
 )
-from scripts.jama.formatters import ItemData, get_formatter
+from scripts.jama.formatters import ItemData, ItemLinks, LinkData, get_formatter
+from scripts.jama.links import get_item_links
 from scripts.jama.tree import ItemNode, build_tree
 
 
-def build_item_data(item: dict, fields_to_show: list[str], item_fields: dict, include_url: bool) -> ItemData:
+def build_item_data(
+    item: dict,
+    fields_to_show: list[str],
+    item_fields: dict,
+    include_url: bool,
+    links: ItemLinks | None = None,
+) -> ItemData:
     """Build an ItemData object with selected fields."""
     fields = item.get("fields", {})
     doc_key = item.get("documentKey", "")
@@ -69,7 +76,40 @@ def build_item_data(item: dict, fields_to_show: list[str], item_fields: dict, in
             project_id = item.get("project", {})
             url = jama_url_for_item(item_id, project_id.get("id") if isinstance(project_id, dict) else project_id)
 
-    return ItemData(doc_key=doc_key, name=name, fields=selected_fields, url=url)
+    return ItemData(doc_key=doc_key, name=name, fields=selected_fields, url=url, links=links)
+
+
+def fetch_links_for_item(jama, doc_key: str, links_mode: str | None) -> ItemLinks | None:
+    """Fetch links for an item based on links_mode.
+
+    Args:
+        jama: Jama client
+        doc_key: Document key
+        links_mode: 'all', 'upstream', 'downstream', or None
+
+    Returns:
+        ItemLinks object or None if links not requested
+    """
+    if not links_mode:
+        return None
+
+    include_upstream = links_mode in ("all", "upstream")
+    include_downstream = links_mode in ("all", "downstream")
+
+    item_links = get_item_links(
+        jama,
+        doc_key,
+        include_upstream=include_upstream,
+        include_downstream=include_downstream,
+    )
+
+    if not item_links:
+        return None
+
+    return ItemLinks(
+        upstream=[LinkData(key=l.key, name=l.name) for l in item_links.upstream],
+        downstream=[LinkData(key=l.key, name=l.name) for l in item_links.downstream],
+    )
 
 
 def format_tree_recursive(
@@ -82,6 +122,7 @@ def format_tree_recursive(
     format_type: str,
     indent: int = 0,
     database: dict | None = None,
+    links_mode: str | None = None,
 ) -> list[str]:
     """
     Format a tree node and all its children according to specified format.
@@ -96,6 +137,7 @@ def format_tree_recursive(
         format_type: Output format type ('tree', 'path', 'nested', 'json', 'flat')
         indent: Current indentation level
         database: Item type database (optional, loaded once and passed down)
+        links_mode: Links to include ('all', 'upstream', 'downstream', or None)
 
     Returns:
         List of formatted strings
@@ -112,7 +154,7 @@ def format_tree_recursive(
             for i, child in enumerate(tree.children):
                 is_last = i == len(tree.children) - 1
                 child_lines = format_tree_recursive(
-                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent + 1, database
+                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent + 1, database, links_mode
                 )
                 if is_last and format_type == "tree" and child_lines:
                     child_lines[0] = child_lines[0].replace("├── ", "└── ", 1)
@@ -122,13 +164,13 @@ def format_tree_recursive(
             lines.extend(container_lines)
             for child in tree.children:
                 child_lines = format_tree_recursive(
-                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent + 1, database
+                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent + 1, database, links_mode
                 )
                 lines.extend(child_lines)
         else:
             for child in tree.children:
                 child_lines = format_tree_recursive(
-                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent, database
+                    jama, child, formatter, fields_to_show, include_url, show_full, format_type, indent, database, links_mode
                 )
                 lines.extend(child_lines)
     elif not tree.is_container and tree.doc_key:
@@ -142,7 +184,8 @@ def format_tree_recursive(
                 item_fields = get_item_type_fields(jama, item_type_id, database)
                 fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or ["description"])
 
-                item_data = build_item_data(item, fields_to_display, item_fields, include_url)
+                links = fetch_links_for_item(jama, tree.doc_key, links_mode)
+                item_data = build_item_data(item, fields_to_display, item_fields, include_url, links)
                 item_data.path = tree.path_str if tree.path_str else None
 
                 item_lines = formatter.format_item(item_data, indent)
@@ -158,6 +201,7 @@ def fetch_items_tree(
     include_url: bool,
     show_full: bool,
     format_type: str,
+    links_mode: str | None = None,
 ) -> list[str]:
     """
     Fetch items from Jama with tree structure preservation.
@@ -169,6 +213,7 @@ def fetch_items_tree(
         include_url: Whether to include URLs
         show_full: Whether to show all fields
         format_type: Output format type
+        links_mode: Links to include ('all', 'upstream', 'downstream', or None)
 
     Returns:
         List of formatted strings
@@ -191,7 +236,7 @@ def fetch_items_tree(
         if is_container:
             container_name = item.get("name") or item.get("fields", {}).get("name") or input_key
             tree = build_tree(jama, item_id, container_name, input_key, [])
-            tree_lines = format_tree_recursive(jama, tree, formatter, fields_to_show, include_url, show_full, format_type, 0, database)
+            tree_lines = format_tree_recursive(jama, tree, formatter, fields_to_show, include_url, show_full, format_type, 0, database, links_mode)
             all_lines.extend(tree_lines)
         else:
             item_type_id = item.get("itemType")
@@ -199,7 +244,9 @@ def fetch_items_tree(
                 item_fields = get_item_type_fields(jama, item_type_id, database)
                 fields_to_display = list(item_fields.keys()) if show_full else (fields_to_show or ["description"])
 
-                item_data = build_item_data(item, fields_to_display, item_fields, include_url)
+                doc_key = item.get("documentKey", input_key)
+                links = fetch_links_for_item(jama, doc_key, links_mode)
+                item_data = build_item_data(item, fields_to_display, item_fields, include_url, links)
                 item_lines = formatter.format_item(item_data)
                 all_lines.extend(item_lines)
 
@@ -247,6 +294,13 @@ def main():
         choices=["tree", "path", "nested", "json", "flat"],
         default="path",
         help="Output format: tree (ASCII tree), path (default, path prefix), nested (sections), json (structured), flat",
+    )
+    parser.add_argument(
+        "--links",
+        nargs="?",
+        const="all",
+        choices=["all", "upstream", "downstream"],
+        help="Include links in output: all (default if flag used), upstream, or downstream",
     )
     parser.add_argument(
         "--no-clipboard",
@@ -305,6 +359,7 @@ def main():
         include_url=args.url,
         show_full=args.full,
         format_type=args.format,
+        links_mode=args.links,
     )
 
     if not outputs:

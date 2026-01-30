@@ -8,6 +8,22 @@ from typing import Any
 
 
 @dataclass
+class LinkData:
+    """Link data for display."""
+
+    key: str
+    name: str
+
+
+@dataclass
+class ItemLinks:
+    """Links associated with an item."""
+
+    upstream: list[LinkData]
+    downstream: list[LinkData]
+
+
+@dataclass
 class ItemData:
     """Normalized item data for formatting."""
 
@@ -16,6 +32,7 @@ class ItemData:
     fields: dict[str, Any]
     path: str | None = None
     url: str | None = None
+    links: ItemLinks | None = None
 
 
 class Formatter(ABC):
@@ -40,6 +57,12 @@ class TreeFormatter(Formatter):
         lines = [f"{'  ' * indent}└── {item.doc_key}: {item.name}"]
         for field_name, field_value in item.fields.items():
             lines.append(f"{'  ' * (indent + 1)}    {field_name}: {str(field_value)[:80]}")
+        if item.links:
+            tree_indent = "  " * (indent + 1) + "    "
+            if item.links.upstream:
+                lines.append(f"{tree_indent}Upstream: {', '.join(l.key for l in item.links.upstream)}")
+            if item.links.downstream:
+                lines.append(f"{tree_indent}Downstream: {', '.join(l.key for l in item.links.downstream)}")
         return lines
 
     def format_container(self, name: str, doc_key: str, indent: int) -> list[str]:
@@ -57,7 +80,9 @@ class PathFormatter(Formatter):
         lines = [f"{path_prefix}{item.doc_key}: {item.name}"]
         for field_name, field_value in item.fields.items():
             field_value_str = str(field_value).replace("\n", " ")
-            lines.append(f"@{field_name}: {field_value_str}")
+            lines.append(f"  {field_name}: {field_value_str}")
+        if item.links:
+            lines.extend(format_links_section(item.links, indent=2))
         lines.append("")
         return lines
 
@@ -80,6 +105,9 @@ class NestedFormatter(Formatter):
             lines.append(f"{'#' * (level + 1)} {field_name}")
             lines.append(f"{field_value}")
             lines.append("")
+        if item.links:
+            lines.extend(format_links_section(item.links, indent=0))
+            lines.append("")
         if item.url:
             lines.append(f"{'#' * (level + 1)} URL")
             lines.append(f"{item.url}")
@@ -96,7 +124,7 @@ class JsonFormatter(Formatter):
 
     def format_item(self, item: ItemData, indent: int = 0) -> list[str]:
         """Format item as JSON."""
-        data = {
+        data: dict[str, Any] = {
             "doc_key": item.doc_key,
             "name": item.name,
         }
@@ -105,6 +133,9 @@ class JsonFormatter(Formatter):
             data["path"] = item.path
         if item.url:
             data["url"] = item.url
+        if item.links:
+            data["upstream"] = [{"key": l.key, "name": l.name} for l in item.links.upstream]
+            data["downstream"] = [{"key": l.key, "name": l.name} for l in item.links.downstream]
         return [json.dumps(data, ensure_ascii=False, indent=2)]
 
     def format_container(self, name: str, doc_key: str, indent: int) -> list[str]:
@@ -124,12 +155,35 @@ class FlatFormatter(Formatter):
             lines.append(f"## {field_name}")
             lines.append(f"{field_value}")
             lines.append("")
+        if item.links:
+            lines.extend(format_links_section(item.links, indent=0))
+            lines.append("")
         lines.append("-" * 60)
         return lines
 
     def format_container(self, name: str, doc_key: str, indent: int) -> list[str]:
         """Containers are not shown in flat format."""
         return []
+
+
+def format_links_section(links: ItemLinks, indent: int = 0) -> list[str]:
+    """Format links section for display."""
+    lines = []
+    prefix = " " * indent
+
+    if links.upstream:
+        lines.append("")
+        lines.append(f"{prefix}Upstream ({len(links.upstream)}):")
+        for link in links.upstream:
+            lines.append(f"{prefix}  {link.key}: {link.name}")
+
+    if links.downstream:
+        lines.append("")
+        lines.append(f"{prefix}Downstream ({len(links.downstream)}):")
+        for link in links.downstream:
+            lines.append(f"{prefix}  {link.key}: {link.name}")
+
+    return lines
 
 
 def get_formatter(format_type: str) -> Formatter:

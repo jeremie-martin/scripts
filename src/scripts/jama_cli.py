@@ -27,6 +27,7 @@ def fetch(
     fields: Annotated[str | None, typer.Option("--fields", "-f", help="Comma-separated fields to show")] = None,
     full: Annotated[bool, typer.Option("--full", help="Show all fields")] = False,
     url: Annotated[bool, typer.Option("--url", help="Include Jama URL for each item")] = False,
+    links: Annotated[str | None, typer.Option("--links", "-l", help="Include links: 'all', 'upstream', or 'downstream'")] = None,
     format: Annotated[str, typer.Option("--format", help="Output format: tree, path, nested, json, flat")] = "path",
     no_clipboard: Annotated[bool, typer.Option("--no-clipboard", help="Don't copy output to clipboard")] = False,
 ):
@@ -41,6 +42,8 @@ def fetch(
         args.append("--full")
     if url:
         args.append("--url")
+    if links is not None:
+        args.extend(["--links", links])
     if format:
         args.extend(["--format", format])
     if no_clipboard:
@@ -424,25 +427,25 @@ def get_links(
             typer.echo(format_links_table(links, show_upstream=show_upstream, show_downstream=show_downstream))
 
 
-@app.command("link")
-def create_link_cmd(
-    source: Annotated[str, typer.Argument(help="Source document key (the item you're linking FROM)")],
-    targets: Annotated[list[str], typer.Argument(help="Target document keys (items to link TO - become upstream)")],
+@app.command("link-upstream")
+def link_upstream_cmd(
+    item: Annotated[str, typer.Argument(help="Item to add links to")],
+    targets: Annotated[list[str], typer.Argument(help="Targets that become upstream of item")],
     dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Preview without creating links")] = False,
 ):
     """
-    Create upstream links from source to targets.
+    Create upstream links (targets become upstream of item).
 
-    Creates relationships where targets become upstream of source.
-    This is typically used to link test cases to requirements.
+    This makes item trace TO targets. Typically used to link a test case
+    to requirements it verifies.
 
     Examples:
-        jama link ABC-SWVER-13 ABC-DI2-86                    # Link test to requirement
-        jama link ABC-SWVER-13 ABC-DI2-86 ABC-DI2-87         # Multiple targets
-        jama link ABC-SWVER-13 ABC-DI2-86 --dry-run          # Preview
+        jama link-upstream ABC-TC-1 ABC-REQ-1              # TC traces to REQ
+        jama link-upstream ABC-TC-1 ABC-REQ-1 ABC-REQ-2    # Multiple targets
+        jama link-upstream ABC-TC-1 ABC-REQ-1 --dry-run    # Preview
     """
     from scripts.jama.common import load_jama
-    from scripts.jama.links import create_links, print_create_results
+    from scripts.jama.links import create_links_upstream, print_create_results
 
     try:
         jama = load_jama()
@@ -450,15 +453,116 @@ def create_link_cmd(
         typer.echo(f"Jama auth error: {e}", err=True)
         raise typer.Exit(2) from None
 
-    typer.echo(f"Creating links from {source} to {len(targets)} target(s)...")
+    typer.echo(f"Creating upstream links: {item} -> {len(targets)} target(s)...")
     if dry_run:
         typer.echo("[DRY RUN MODE - No changes will be made]")
     typer.echo()
 
-    results = create_links(jama, source, targets, dry_run=dry_run)
+    results = create_links_upstream(jama, item, targets, dry_run=dry_run)
     print_create_results(results, dry_run=dry_run)
 
-    # Exit with error if any failed
+    errors = sum(1 for r in results if r["status"] == "error")
+    if errors > 0:
+        raise typer.Exit(1)
+
+
+@app.command("link-downstream")
+def link_downstream_cmd(
+    item: Annotated[str, typer.Argument(help="Item to add links to")],
+    targets: Annotated[list[str], typer.Argument(help="Targets that become downstream of item")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Preview without creating links")] = False,
+):
+    """
+    Create downstream links (targets become downstream of item).
+
+    This makes targets trace TO item. Typically used to link test cases
+    to a requirement they verify.
+
+    Examples:
+        jama link-downstream ABC-REQ-1 ABC-TC-1              # TC traces to REQ
+        jama link-downstream ABC-REQ-1 ABC-TC-1 ABC-TC-2     # Multiple targets
+        jama link-downstream ABC-REQ-1 ABC-TC-1 --dry-run    # Preview
+    """
+    from scripts.jama.common import load_jama
+    from scripts.jama.links import create_links_downstream, print_create_results
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        typer.echo(f"Jama auth error: {e}", err=True)
+        raise typer.Exit(2) from None
+
+    typer.echo(f"Creating downstream links: {item} <- {len(targets)} target(s)...")
+    if dry_run:
+        typer.echo("[DRY RUN MODE - No changes will be made]")
+    typer.echo()
+
+    results = create_links_downstream(jama, item, targets, dry_run=dry_run)
+    print_create_results(results, dry_run=dry_run)
+
+    errors = sum(1 for r in results if r["status"] == "error")
+    if errors > 0:
+        raise typer.Exit(1)
+
+
+@app.command("unlink")
+def unlink_cmd(
+    item: Annotated[str, typer.Argument(help="Document key to unlink from")],
+    targets: Annotated[list[str] | None, typer.Argument(help="Specific targets to unlink")] = None,
+    all_upstream: Annotated[bool, typer.Option("--all-upstream", help="Remove all upstream links")] = False,
+    all_downstream: Annotated[bool, typer.Option("--all-downstream", help="Remove all downstream links")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", "-n", help="Preview without deleting")] = False,
+):
+    """
+    Remove links from an item.
+
+    Examples:
+        jama unlink ABC-TC-1 ABC-REQ-1              # Remove specific link
+        jama unlink ABC-TC-1 ABC-REQ-1 ABC-REQ-2    # Multiple targets
+        jama unlink ABC-TC-1 --all-upstream         # Remove all upstream links
+        jama unlink ABC-TC-1 --all-downstream       # Remove all downstream links
+        jama unlink ABC-TC-1 ABC-REQ-1 --dry-run    # Preview
+    """
+    from scripts.jama.common import load_jama
+    from scripts.jama.links import delete_all_links, delete_links, print_delete_results
+
+    # Validate arguments
+    if not targets and not all_upstream and not all_downstream:
+        typer.echo("Error: Specify targets to unlink or use --all-upstream/--all-downstream", err=True)
+        raise typer.Exit(1)
+
+    if targets and (all_upstream or all_downstream):
+        typer.echo("Error: Cannot specify both targets and --all-upstream/--all-downstream", err=True)
+        raise typer.Exit(1)
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        typer.echo(f"Jama auth error: {e}", err=True)
+        raise typer.Exit(2) from None
+
+    if dry_run:
+        typer.echo("[DRY RUN MODE - No changes will be made]")
+    typer.echo()
+
+    if targets:
+        typer.echo(f"Removing links: {item} <-> {len(targets)} target(s)...")
+        results = delete_links(jama, item, targets, dry_run=dry_run)
+    else:
+        direction: str
+        if all_upstream and all_downstream:
+            direction = "both"
+            typer.echo(f"Removing all links from {item}...")
+        elif all_upstream:
+            direction = "upstream"
+            typer.echo(f"Removing all upstream links from {item}...")
+        else:
+            direction = "downstream"
+            typer.echo(f"Removing all downstream links from {item}...")
+        results = delete_all_links(jama, item, direction=direction, dry_run=dry_run)  # type: ignore[arg-type]
+
+    print_delete_results(results, dry_run=dry_run)
+
     errors = sum(1 for r in results if r["status"] == "error")
     if errors > 0:
         raise typer.Exit(1)
