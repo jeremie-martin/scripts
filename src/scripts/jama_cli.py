@@ -371,6 +371,111 @@ def db_path():
 # =============================================================================
 
 
+# =============================================================================
+# Trace subcommand
+# =============================================================================
+
+
+@app.command("trace")
+def trace(
+    keys: Annotated[list[str], typer.Argument(help="Jama document keys, container keys, or a file with keys")],
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="Output file (.xlsx or .json)")] = None,
+    fields: Annotated[str, typer.Option("--fields", "-f", help="Comma-separated fields")] = "name,description",
+    upstream: Annotated[list[str] | None, typer.Option("--upstream", "-u", help="Filter upstream by pattern (repeatable)")] = None,
+    downstream: Annotated[list[str] | None, typer.Option("--downstream", "-d", help="Filter downstream by pattern (repeatable)")] = None,
+    format: Annotated[str, typer.Option("--format", help="Terminal output format: table or json")] = "table",
+    no_timestamp: Annotated[bool, typer.Option("--no-timestamp", help="Don't timestamp output filename")] = False,
+):
+    """
+    Build trace matrix for Jama items with upstream/downstream links.
+
+    Creates a traceability matrix with columns: Upstream | Key | Fields... | Downstream
+
+    Examples:
+        jama trace ABC-FLD-164 -o matrix.xlsx
+        jama trace ABC-REQ-1 -f name,description,ac,rationale
+        jama trace keys.txt -u SWVER- -d TEST- --format json
+        jama trace ABC-FLD-100 -u REQ- -u DI2- -d TC- -o full_matrix.xlsx
+    """
+    from scripts.jama.common import load_jama
+    from scripts.jama.trace import build_trace_rows, expand_trace_keys, load_trace_keys
+    from scripts.jama.trace_formatters import (
+        TraceExcelFormatter,
+        TraceJsonFormatter,
+        TraceTableFormatter,
+        timestamped_path,
+    )
+
+    try:
+        jama = load_jama()
+    except Exception as e:
+        typer.echo(f"Jama auth error: {e}", err=True)
+        raise typer.Exit(2) from None
+
+    # Load and expand keys
+    input_keys = load_trace_keys(list(keys))
+    doc_keys = expand_trace_keys(jama, input_keys)
+
+    if not doc_keys:
+        typer.echo("No valid document keys to process.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Processing {len(doc_keys)} item(s)...", err=True)
+
+    # Parse field names
+    field_names = [f.strip() for f in fields.split(",") if f.strip()]
+
+    # Show active filters
+    if upstream:
+        typer.echo(f"Upstream filter(s): {', '.join(upstream)}", err=True)
+    if downstream:
+        typer.echo(f"Downstream filter(s): {', '.join(downstream)}", err=True)
+
+    # Build trace rows
+    rows = build_trace_rows(
+        jama,
+        doc_keys,
+        field_names=field_names,
+        upstream_patterns=upstream,
+        downstream_patterns=downstream,
+    )
+
+    if not rows:
+        typer.echo("No data to export.", err=True)
+        raise typer.Exit(1)
+
+    # Output handling
+    if output:
+        output_path = Path(output)
+
+        # Ensure .xlsx extension for Excel output
+        if output_path.suffix.lower() not in (".xlsx", ".json"):
+            output_path = output_path.with_suffix(".xlsx")
+
+        # Add timestamp unless disabled
+        if not no_timestamp:
+            output_path = timestamped_path(output_path)
+
+        if output_path.suffix.lower() == ".json":
+            # JSON file output
+            formatter = TraceJsonFormatter()
+            output_path.write_text(formatter.format(rows, field_names))
+        else:
+            # Excel output
+            formatter = TraceExcelFormatter()
+            formatter.format(rows, field_names, output_path)
+
+        typer.echo(f"Wrote {len(rows)} row(s) to: {output_path}")
+    else:
+        # Terminal output
+        if format == "json":
+            formatter = TraceJsonFormatter()
+            typer.echo(formatter.format(rows, field_names))
+        else:
+            formatter = TraceTableFormatter()
+            typer.echo(formatter.format(rows, field_names))
+
+
 @app.command("links")
 def get_links(
     keys: Annotated[list[str], typer.Argument(help="Jama document keys to query")],
