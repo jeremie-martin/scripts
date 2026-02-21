@@ -31,6 +31,10 @@ screenshot = [
   "pyautogui>=0.9.54",
   "Pillow>=10.0.0",
 ]
+ocr = [
+  "torch>=2.10.0",
+  "transformers>=5.2.0",
+]
 dev = ["ruff>=0.12.9"]
 
 [project.scripts]

@@ -58,6 +58,44 @@ def _copy_to_clipboard(img: Image.Image) -> None:
         typer.echo(f"Failed to copy image to clipboard: {e}")
 
 
+def _copy_text_to_clipboard(text: str) -> None:
+    """Copy text to both PRIMARY and CLIPBOARD X selections."""
+    for sel in ("primary", "clipboard"):
+        try:
+            proc = subprocess.Popen(["xclip", "-selection", sel], stdin=subprocess.PIPE)
+            proc.communicate(text.encode())
+        except Exception as e:
+            typer.echo(f"Failed to copy text to {sel}: {e}")
+
+
+def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
+    """Run LightOnOCR on a saved image and return extracted text."""
+    try:
+        import torch
+        from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+    except ImportError:
+        typer.echo("OCR requires torch and transformers: pip install torch transformers")
+        raise typer.Exit(code=1)
+
+    model_id = "lightonai/LightOnOCR-2-1B"
+    use_cuda = torch.cuda.is_available()
+    device = "cuda" if use_cuda else "cpu"
+    dtype = torch.bfloat16 if use_cuda else torch.float32
+
+    typer.echo("Loading OCR model...")
+    model = LightOnOcrForConditionalGeneration.from_pretrained(model_id, torch_dtype=dtype).to(device)
+    processor = LightOnOcrProcessor.from_pretrained(model_id)
+
+    conversation = [{"role": "user", "content": [{"type": "image", "url": image_path}]}]
+    inputs = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt")
+    inputs = {k: (v.to(device=device, dtype=dtype) if v.is_floating_point() else v.to(device)) for k, v in inputs.items()}
+
+    typer.echo("Running OCR...")
+    output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
+    generated_ids = output_ids[0, inputs["input_ids"].shape[1] :]
+    return processor.decode(generated_ids, skip_special_tokens=True).strip()
+
+
 @app.command()
 def full(
     dir: Optional[str] = DIR_OPTION,
@@ -269,6 +307,8 @@ class SelectionTool:
     def on_key(self, event: tk.Event) -> None:
         if event.keysym in ("Return", "space"):
             self.on_confirm()
+        elif event.keysym == "o":
+            self.on_ocr()
         elif event.keysym == "Escape":
             self.root.destroy()
 
@@ -280,6 +320,17 @@ class SelectionTool:
         typer.echo(f"Screenshot saved as {filepath}")
         typer.echo("Screenshot copied to clipboard.")
         self.root.destroy()
+
+    def on_ocr(self) -> None:
+        left, top, right, bottom = self.rect
+        cropped = self.orig_img.crop((left, top, right, bottom)).copy()
+        filepath = _save_image(cropped, "selection", self.save_dir)
+        typer.echo(f"Screenshot saved as {filepath}")
+        self.root.destroy()
+        text = _run_ocr(filepath)
+        typer.echo(f"OCR result:\n{text}")
+        _copy_text_to_clipboard(text)
+        typer.echo("OCR text copied to clipboard (primary + clipboard).")
 
     def run(self) -> None:
         self.root.mainloop()
