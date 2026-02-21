@@ -16,15 +16,20 @@ dependencies = [
   "pathspec>=0.12.1",
   "tomli>=2.3.0",
   "openpyxl>=3.1.5",
+  "youtube-transcript-api>=1.2.2",
 ]
 
 [project.optional-dependencies]
 # Keep base install light; opt into features as needed
-jama = ["py-jama-rest-client>=1.17.1", "beautifulsoup4>=4.12.3", "mcp>=1.0.0"]
 media = [
   "youtube-transcript-api>=1.2.2",
   # keep flexible, yt-dlp updates frequently
   "yt-dlp>=2024.10.0",
+]
+screenshot = [
+  "mss>=9.0.1",
+  "pyautogui>=0.9.54",
+  "Pillow>=10.0.0",
 ]
 dev = ["ruff>=0.12.9"]
 
@@ -36,11 +41,7 @@ ffcut = "scripts.ffcut:main"
 gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
 clipmedia = "scripts.clipmedia:app"
-# jama tools (stay discrete *and* available via `scripts jama …`)
-jama = "scripts.jama_cli:main"
-jama-mcp = "scripts.jama_mcp:main"
-jamafetch = "scripts.jamafetch:main"
-jamaupdate = "scripts.jamaupdate:main"
+# legacy jama tools (main CLI migrated to jamacli package)
 jamaclean = "scripts.jamaclean:main"
 jamaconcat = "scripts.jamaconcat:main"
 jamaconcatfull = "scripts.jamaconcatfull:main"
@@ -53,6 +54,8 @@ jamanotest = "scripts.jamanotest:main"
 # Windows-friendly aliases (optional)
 img-twi = "scripts.img_tools:cmd_2twi"
 img-work = "scripts.img_tools:cmd_2work"
+# screenshot
+screenshot = "scripts.screenshot:app"
 # umbrella CLI
 scripts = "scripts.cli:app"
 
