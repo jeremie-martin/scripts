@@ -45,6 +45,7 @@ ffcut = "scripts.ffcut:main"
 gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
 clipmedia = "scripts.clipmedia:app"
+mdclip = "scripts.mdclip:app"
 # legacy jama tools (main CLI migrated to jamacli package)
 jamaclean = "scripts.jamaclean:main"
 jamaconcat = "scripts.jamaconcat:main"

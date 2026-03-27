@@ -24,6 +24,7 @@ uv run transcript …    # needs --extra media at sync time
 uv run ffcut …         # needs ffmpeg on PATH; yt-dlp provided by [media]
 uv run gdiffpath …
 uv run import-photos …
+uv run mdclip notes.md  # copies a rendered HTML preview of the Markdown to the clipboard
 uv run jamaclean …     # needs --extra jama
 uv run jamaconcat …    # needs --extra jama
 uv run jamaconcatfull … # needs --extra jama
@@ -69,6 +70,7 @@ Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
 
 ### Platform notes
 
+- mdclip: rich HTML clipboard output is implemented for Linux backends (`wl-copy`, `xclip`, `xsel`). Other platforms currently fall back to plain text.
 - ffcut: `--quiet` suppresses ffmpeg/yt-dlp output.
 - import-photos: `--symlinks` on Windows may require Developer Mode or admin privileges for symlink creation.
 
