@@ -942,7 +942,9 @@ Config files:
 
     # Output options
     parser.add_argument(
+        "-n",
         "--no-header",
+        "--no-filename",
         action="store_true",
         help="Don't print 'path:' header before file contents",
     )
