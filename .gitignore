@@ -287,7 +287,10 @@ xcuserdata/
 *.xcscmblueprint
 
 # Project specific
-# Add any project-specific files here
+# screenshot tool outputs (saved into the cwd by default)
+selection_*.png
+full_desktop_*.png
+monitor*_*.png
 
 # Example files (copy these to create actual files)
 *.example

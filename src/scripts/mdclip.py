@@ -223,7 +223,7 @@ def _copy_html_to_clipboard(html: str, plain_text: str, backend: str | None) -> 
 
 
 @app.command()
-def main(
+def run(
     file_path: Path = FILE_ARGUMENT,
     backend: str | None = BACKEND_OPTION,
     title: str | None = TITLE_OPTION,
@@ -257,5 +257,9 @@ def main(
     typer.secho(message, fg=typer.colors.GREEN)
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()

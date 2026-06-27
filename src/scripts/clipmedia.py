@@ -178,7 +178,7 @@ def _copy_to_clipboard(source: Path, mime: str, backend: str | None) -> str:
 
 
 @app.command()
-def main(
+def run(
     file_path: Path = FILE_ARGUMENT,
     mime: str | None = MIME_OPTION,
     backend: str | None = BACKEND_OPTION,
@@ -208,5 +208,9 @@ def main(
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()

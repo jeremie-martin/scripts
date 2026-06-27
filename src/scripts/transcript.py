@@ -20,7 +20,7 @@ from youtube_transcript_api import (
 )
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
-from scripts.jama.common import copy_to_all_clipboards
+from scripts.clipboard import copy_to_all_clipboards
 
 # Lock for thread-safe printing
 print_lock = Lock()

@@ -6,17 +6,15 @@ requires-python = ">=3.12"
 dynamic = ["version"]
 dependencies = [
   "pyperclip>=1.9.0",
-  "python-dotenv>=1.0.1",
   "typer>=0.12.3",
   "rich>=13.7.1",
   "yt-dlp>=2025.8.27",
-  "py-jama-rest-client>=1.17.1",
-  "markdownify>=1.2.0",
-  "bs4>=0.0.2",
   "pathspec>=0.12.1",
   "tomli>=2.3.0",
-  "openpyxl>=3.1.5",
   "youtube-transcript-api>=1.2.2",
+  # mdclip renders Markdown → styled HTML for the clipboard
+  "markdown-it-py>=3.0.0",
+  "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]
@@ -44,26 +42,18 @@ transcript = "scripts.transcript:main"
 ffcut = "scripts.ffcut:main"
 gdiffpath = "scripts.git_tools:main"
 import-photos = "scripts.import_photos:main"
-clipmedia = "scripts.clipmedia:app"
-mdclip = "scripts.mdclip:app"
-quick = "scripts.quick:app"
-# legacy jama tools (main CLI migrated to jamacli package)
-jamaclean = "scripts.jamaclean:main"
-jamaconcat = "scripts.jamaconcat:main"
-jamaconcatfull = "scripts.jamaconcatfull:main"
-jamafilltests = "scripts.jamafilltests:main"
-jamalinking = "scripts.jamalinking:main"
-jamanotest = "scripts.jamanotest:main"
-# image tools
+clipmedia = "scripts.clipmedia:main"
+mdclip = "scripts.mdclip:main"
+quick = "scripts.quick:main"
+screenshot = "scripts.screenshot:main"
+# image tools — one module exposes two binaries (see AGENTS.md)
 2twi = "scripts.img_tools:cmd_2twi"
 2work = "scripts.img_tools:cmd_2work"
 # Windows-friendly aliases (optional)
 img-twi = "scripts.img_tools:cmd_2twi"
 img-work = "scripts.img_tools:cmd_2work"
-# screenshot
-screenshot = "scripts.screenshot:app"
 # umbrella CLI
-scripts = "scripts.cli:app"
+scripts = "scripts.cli:main"
 
 [build-system]
 requires = ["setuptools>=80", "setuptools-scm>=8", "wheel"]

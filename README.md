@@ -2,17 +2,27 @@
 
 Requires Python 3.12+ (uv will manage a matching runtime).
 
-### Install (uv-native)
+### Install the tools (any machine with GitHub access)
+Install all the console commands onto your PATH straight from the repo:
 ```bash
-# Base
+uv tool install git+ssh://git@github.com/jeremie-martin/scripts.git
+
+# include the screenshot tool's deps
+uv tool install 'scripts[screenshot] @ git+ssh://git@github.com/jeremie-martin/scripts.git'
+```
+Run a one-off without installing:
+```bash
+uvx --from git+ssh://git@github.com/jeremie-martin/scripts.git concat …
+```
+
+### Develop locally
+```bash
+# Sync a dev venv (all extras)
 uv sync
 
-# With extras
-uv sync --extra jama
-uv sync --extra media
-
-# Both extras
-uv sync --extra jama --extra media
+# Install the tools in EDITABLE mode — edits to existing commands are live, no reinstall
+make retool          # adds the screenshot extra
+make retool-ocr      # also pulls the heavy OCR extra (torch/transformers)
 ```
 
 ### Run
@@ -25,14 +35,8 @@ uv run ffcut …         # needs ffmpeg on PATH; yt-dlp provided by [media]
 uv run gdiffpath …
 uv run import-photos …
 uv run mdclip notes.md  # copies a rendered HTML preview of the Markdown to the clipboard
-uv run jamaclean …     # needs --extra jama
-uv run jamaconcat …    # needs --extra jama
-uv run jamaconcatfull … # needs --extra jama
-uv run jamafilltests …  # needs --extra jama
-uv run jamanotest …     # needs --extra jama
-uv run jamatmp …        # needs --extra jama
-# Linkers default to DRY RUN; pass --apply to execute
-# jamaconcat*, transcript copy to clipboard by default; use -t/--terminal to print
+uv run screenshot selection  # interactive region capture (press 'o' for OCR if installed)
+# transcript copies to clipboard by default; use -t/--terminal to print
 uv run 2twi …           # ImageMagick (writes to twi/, dir must pre-exist)
 uv run img-twi …        # ImageMagick (writes to twi/, dir must pre-exist)
 uv run 2work …          # ImageMagick (writes to ../working/, dir must pre-exist)
@@ -45,16 +49,7 @@ Umbrella wrapper (optional):
 ```bash
 uv run scripts list
 uv run scripts run concat -- <args>
-uv run scripts jama clean -- ABSD-SWVER-123
 uv run scripts version    # quick sanity check the install
-```
-
-### Environment
-Create `.env` in project root for Jama:
-```bash
-JAMA_URL=https://your-instance.jamacloud.com
-CLIENT_ID=…
-CLIENT_SECRET=…
 ```
 
 > Note: No `setup_scripts.sh` needed — entry points handle global shims.
@@ -74,8 +69,9 @@ Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
 - ffcut: `--quiet` suppresses ffmpeg/yt-dlp output.
 - import-photos: `--symlinks` on Windows may require Developer Mode or admin privileges for symlink creation.
 
-### Deploy to another machine (no GitHub access on target)
+### Deploy to a machine with no GitHub access (fallback)
 
+If the target can't reach GitHub, push the repo over SSH instead of installing from git.
 From your dev machine, rsync the repo to the target host and auto-install the `scripts` tool:
 
 ```bash

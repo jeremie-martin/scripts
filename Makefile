@@ -6,13 +6,17 @@
 # Ensure uv is available
 UV := uv
 
-.PHONY: retool sync clean ship help
+.PHONY: retool retool-ocr sync clean ship help
 
-## retool: Reinstall project tools from current repo
+## retool: Install tools (editable) — edits to existing commands go live, no reinstall
 retool:
-	@echo "🔄 Reinstalling scripts with uv..."
-	$(UV) tool uninstall scripts || true
-	$(UV) tool install --no-cache --from .[jama,screenshot] scripts
+	@echo "🔄 Installing scripts (editable) with uv..."
+	$(UV) tool install --force --editable '.[screenshot]'
+
+## retool-ocr: Like retool, but also pulls the heavy OCR extra (torch/transformers)
+retool-ocr:
+	@echo "🔄 Installing scripts (editable, with OCR) with uv..."
+	$(UV) tool install --force --editable '.[screenshot,ocr]'
 
 ## sync: Sync project dependencies (including extras)
 sync:

@@ -85,7 +85,7 @@ SCAFFOLDS = {
 
 
 @app.command()
-def main(
+def run(
     name: str = NAME_ARGUMENT,
     type: str = TYPE_ARGUMENT,
     base: Path = BASE_OPTION,
@@ -126,5 +126,9 @@ def main(
     typer.echo(str(dest))
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()

@@ -17,6 +17,8 @@ import pyautogui
 import typer
 from PIL import Image, ImageFilter
 
+from scripts.clipboard import copy_to_all_clipboards
+
 app = typer.Typer(help="Screenshot tool with full-desktop, single-monitor, and interactive-selection modes.")
 
 DIR_OPTION = typer.Option(None, "--dir", "-d", help="Directory to save screenshots (default: current directory).")
@@ -107,13 +109,11 @@ def _copy_to_clipboard(img: Image.Image) -> None:
 
 
 def _copy_text_to_clipboard(text: str) -> None:
-    """Copy text to both PRIMARY and CLIPBOARD X selections."""
-    for sel in ("primary", "clipboard"):
-        try:
-            proc = subprocess.Popen(["xclip", "-selection", sel], stdin=subprocess.PIPE)
-            proc.communicate(text.encode())
-        except Exception as e:
-            typer.echo(f"Failed to copy text to {sel}: {e}")
+    """Copy text to PRIMARY and CLIPBOARD via the shared helper (xclip/xsel/wl-copy)."""
+    try:
+        copy_to_all_clipboards(text)
+    except Exception as e:
+        typer.echo(f"Failed to copy text to clipboard: {e}")
 
 
 def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
@@ -122,7 +122,7 @@ def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
         import torch
         from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
     except ImportError:
-        typer.echo("OCR requires torch and transformers: pip install torch transformers")
+        typer.echo("OCR needs the 'ocr' extra. Reinstall with: make retool-ocr")
         raise typer.Exit(code=1)
 
     model_id = "lightonai/LightOnOCR-2-1B"
@@ -583,5 +583,9 @@ def _legacy_mode(
         raise typer.Exit(code=1)
 
 
-if __name__ == "__main__":
+def main() -> None:
     app()
+
+
+if __name__ == "__main__":
+    main()
