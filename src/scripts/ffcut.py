@@ -39,8 +39,23 @@ def download_youtube(url: str) -> str:
     return os.path.join(outdir, name)
 
 
-def build_cmd(inp: str, start: str, end: str, out: str, crf: int, scale: int | None) -> list[str]:
-    args = [FFMPEG, "-y", "-ss", start, "-to", end, "-i", inp]
+def build_cmd(
+    inp: str,
+    start: str | None,
+    end: str | None,
+    out: str,
+    crf: int,
+    scale: int | None,
+    audio_track: int | None = None,
+) -> list[str]:
+    args = [FFMPEG, "-y"]
+    if start:
+        args += ["-ss", start]
+    if end:
+        args += ["-to", end]
+    args += ["-i", inp]
+    if audio_track is not None:
+        args += ["-map", "0:v:0", "-map", f"0:a:{audio_track}"]
     ext = out.rsplit(".", 1)[-1].lower()
     if ext in {"mp3", "aac", "wav", "ogg", "flac"}:
         args += ["-vn"]
@@ -86,11 +101,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     p = argparse.ArgumentParser(description="Cut a time range from a file or YouTube URL (Twitter-ready MP4).")
     p.add_argument("input")
-    p.add_argument("start")
-    p.add_argument("end")
     p.add_argument("output")
+    p.add_argument("-ss", "--start", default=None, help="Start time (omit for beginning)")
+    p.add_argument("-to", "--end", default=None, help="End time (omit for end of file)")
     p.add_argument("-crf", type=int, default=22)
     p.add_argument("-scale", type=int, default=None)
+    p.add_argument(
+        "-a",
+        "--audio-track",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Select audio track N (0-indexed, use ffprobe to list tracks)",
+    )
     p.add_argument("--quiet", action="store_true", help="Hide ffmpeg/yt-dlp command echo")
     a = p.parse_args(argv)
 
@@ -110,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         inp = a.input
 
-    cmd = build_cmd(inp, a.start, a.end, a.output, a.crf, a.scale)
+    cmd = build_cmd(inp, a.start, a.end, a.output, a.crf, a.scale, a.audio_track)
     if not a.quiet:
         print("running:", " ".join(cmd))
     try:
