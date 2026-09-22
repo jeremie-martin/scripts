@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-nsxiv_bin=${NSXIV_BIN:-/usr/local/bin/nsxiv}
+nsxiv_bin=${NSXIV_BIN:-nsxiv}
 target=${1:-}
 
 if [[ -z "$target" ]]; then

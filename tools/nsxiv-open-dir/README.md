@@ -9,8 +9,8 @@ nsxiv-open-dir photo.png
 nsxiv-open-dir pictures/
 ```
 
-NSXIV_BIN overrides the existing default /usr/local/bin/nsxiv. Arguments and behavior
-are preserved from the original local script. A symlink makes edits live; remove
+NSXIV_BIN overrides the default nsxiv executable found on PATH. Arguments and behavior
+otherwise match the original local script. A symlink makes edits live; remove
 only the link to uninstall. For a copied install, use install -m 755.
 
 Tests: `uv run --no-project --with pytest pytest tools/nsxiv-open-dir/tests`.
