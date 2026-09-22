@@ -7,34 +7,28 @@ from typer import Typer
 app = Typer()
 
 
-def _is_binary_existing(path: str) -> bool:
-    """Return True if git attributes mark file as binary."""
-    try:
-        attr = subprocess.check_output(["git", "check-attr", "binary", "--", path], text=True)
-    except subprocess.CalledProcessError:
-        return False
-    return ": binary: set" in attr
-
-
 @app.command()
 def gdiffpath(staged: bool = False, target: str = ""):
     """List relative paths of modified non-binary files."""
     try:
+        root = os.fsdecode(subprocess.check_output(["git", "rev-parse", "--show-toplevel"]).rstrip(b"\n"))
         if target:
             cmd = (
-                ["git", "diff", "--name-only", target]
+                ["git", "-C", root, "diff", target]
                 if ".." in target
-                else ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", target]
+                else ["git", "-C", root, "diff-tree", "--root", "--no-commit-id", "-r", target]
             )
         else:
-            cmd = ["git", "diff", "--cached", "--name-only"] if staged else ["git", "diff", "HEAD", "--name-only"]
-        out = subprocess.check_output(cmd, text=True)
-        for f in out.split():
-            if not os.path.isfile(f):
+            cmd = ["git", "-C", root, "diff", "--cached" if staged else "HEAD"]
+        out = subprocess.check_output([*cmd, "--numstat", "--no-renames", "-z", "--"])
+        for record in out.split(b"\0"):
+            if not record:
                 continue
-            if not _is_binary_existing(f):
-                print(f)
-    except subprocess.CalledProcessError as e:
+            added, removed, raw_path = record.split(b"\t", 2)
+            path = os.path.join(root, os.fsdecode(raw_path))
+            if added != b"-" and removed != b"-" and os.path.isfile(path):
+                print(os.path.relpath(path))
+    except (OSError, subprocess.CalledProcessError) as e:
         print(e, file=sys.stderr)
         raise SystemExit(1) from None
 

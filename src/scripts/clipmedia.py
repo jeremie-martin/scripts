@@ -8,10 +8,12 @@ from pathlib import Path
 
 import typer
 
+from .clipboard import ClipboardError, copy_linux
+
 app = typer.Typer(help="Copy media files to the clipboard with automatic MIME detection.")
 
 
-class ClipmediaError(Exception):
+class ClipmediaError(ClipboardError):
     """Raised when the clipboard operation fails."""
 
 
@@ -53,46 +55,6 @@ def _pipe_file(cmd: list[str], source: Path) -> None:
         subprocess.run(cmd, check=True, stdin=fh)
 
 
-def _copy_linux(source: Path, mime: str, preferred: str | None) -> str:
-    candidates = [preferred] if preferred else ["wl-copy", "xclip", "xsel"]
-    tried: list[str] = []
-
-    for backend in candidates:
-        if not backend:
-            continue
-
-        if backend == "wl-copy":
-            if shutil.which("wl-copy"):
-                _pipe_file(["wl-copy", "--type", mime], source)
-                _pipe_file(["wl-copy", "--primary", "--type", mime], source)
-                return "wl-copy"
-            tried.append("wl-copy")
-
-        elif backend == "xclip":
-            if shutil.which("xclip"):
-                _pipe_file(["xclip", "-selection", "clipboard", "-t", mime, "-i"], source)
-                _pipe_file(["xclip", "-selection", "primary", "-t", mime, "-i"], source)
-                return "xclip"
-            tried.append("xclip")
-
-        elif backend == "xsel":
-            if shutil.which("xsel"):
-                _pipe_file(["xsel", "--clipboard", "--input", "--mime-type", mime], source)
-                _pipe_file(["xsel", "--primary", "--input", "--mime-type", mime], source)
-                return "xsel"
-            tried.append("xsel")
-
-        else:
-            raise ClipmediaError(f"Unknown Linux backend '{backend}'. Supported: wl-copy, xclip, xsel.")
-
-    if preferred:
-        raise ClipmediaError(f"Requested backend '{preferred}' is unavailable. Install it and retry.")
-
-    available = [cmd for cmd in ["wl-copy", "xclip", "xsel"] if shutil.which(cmd)]
-    hint = "Install wl-clipboard or xclip." if not available else f"Available backends: {', '.join(available)}"
-    raise ClipmediaError(f"No clipboard backend found. {hint}")
-
-
 APPLE_TYPE_MAP = {
     "image/png": "\u00abclass PNGf\u00bb",
     "image/jpeg": "JPEG picture",
@@ -130,7 +92,7 @@ def _copy_windows(source: Path, mime: str, preferred: str | None) -> str:
         raise ClipmediaError("Windows backend options are limited to 'powershell'.")
 
     # Use FileDrop for maximum compatibility with paste targets.
-    resolved = str(source.resolve())
+    resolved = str(source.resolve()).replace("'", "''")
     ps_script = rf"""
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -168,7 +130,7 @@ def _copy_to_clipboard(source: Path, mime: str, backend: str | None) -> str:
             raise ClipmediaError(f"Unknown backend '{backend}'.")
 
     if system == "Linux":
-        return _copy_linux(source, mime, normalized)
+        return copy_linux(source, mime, normalized)
     if system == "Darwin":
         return _copy_macos(source, mime, normalized)
     if system == "Windows":
@@ -189,7 +151,7 @@ def run(
 
     try:
         backend_used = _copy_to_clipboard(source, detected_mime, backend)
-    except ClipmediaError as exc:
+    except (ClipboardError, OSError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
     except subprocess.CalledProcessError as exc:  # pragma: no cover - dependent on system tooling

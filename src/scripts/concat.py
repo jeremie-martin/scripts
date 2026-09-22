@@ -11,39 +11,22 @@ Features:
 """
 
 import argparse
-import fnmatch
 import glob as pyglob
 import os
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 from shutil import which
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
-from scripts.clipboard import copy_to_all_clipboards
+import pathspec
+from rich.console import Console
+from rich.text import Text
+from rich.tree import Tree
 
-try:
-    import tomllib  # Python 3.11+
-except ImportError:
-    try:
-        import tomli as tomllib
-    except ImportError:
-        tomllib = None
-
-try:
-    import pathspec
-except ImportError:
-    pathspec = None
-
-try:
-    from rich.console import Console
-    from rich.text import Text
-    from rich.tree import Tree
-except ImportError:
-    Console = Tree = Text = None
-
+from .clipboard import copy_to_all_clipboards
 
 # =============================================================================
 # CONSTANTS
@@ -229,84 +212,58 @@ class Config:
     show_skipped: bool = False
     verbose: bool = False
 
-    def merge(self, other: "Config") -> "Config":
-        """Merge another config into this one (other takes precedence for non-default values)."""
-        merged = Config()
 
-        # Merge lists (combine them)
-        merged.exclude_patterns = self.exclude_patterns + other.exclude_patterns
-        merged.include_patterns = self.include_patterns + other.include_patterns
-
-        # For boolean/scalar values, prefer 'other' if it differs from default
-        default = Config()
-
-        merged.use_gitignore = other.use_gitignore if other.use_gitignore != default.use_gitignore else self.use_gitignore
-        merged.use_default_excludes = (
-            other.use_default_excludes if other.use_default_excludes != default.use_default_excludes else self.use_default_excludes
-        )
-        merged.pretty = other.pretty if other.pretty != default.pretty else self.pretty
-        merged.output_mode = other.output_mode if other.output_mode != default.output_mode else self.output_mode
-        merged.add_header = other.add_header if other.add_header != default.add_header else self.add_header
-        merged.include_binary = other.include_binary if other.include_binary != default.include_binary else self.include_binary
-        merged.encoding = other.encoding if other.encoding != default.encoding else self.encoding
-        merged.errors = other.errors if other.errors != default.errors else self.errors
-        merged.max_scan_bytes = other.max_scan_bytes if other.max_scan_bytes != default.max_scan_bytes else self.max_scan_bytes
-        merged.show_skipped = other.show_skipped if other.show_skipped != default.show_skipped else self.show_skipped
-        merged.verbose = other.verbose if other.verbose != default.verbose else self.verbose
-
-        return merged
+CONFIG_SECTIONS = {
+    "patterns": {
+        "exclude": "exclude_patterns",
+        "include": "include_patterns",
+        "use_gitignore": "use_gitignore",
+        "use_default_excludes": "use_default_excludes",
+    },
+    "output": {"pretty": "pretty", "mode": "output_mode", "add_header": "add_header"},
+    "files": {"include_binary": "include_binary", "encoding": "encoding", "errors": "errors", "max_scan_bytes": "max_scan_bytes"},
+    "misc": {"show_skipped": "show_skipped", "verbose": "verbose"},
+}
 
 
-def load_toml_config(path: Path) -> Config | None:
-    """Load configuration from a TOML file."""
-    if not tomllib:
-        return None
-
+def load_toml_config(path: Path) -> dict:
+    """Read only explicitly configured fields; defaults belong to Config."""
     if not path.exists():
-        return None
-
+        return {}
     try:
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-
-        # Map TOML to Config
-        config = Config()
-
-        if "patterns" in data:
-            config.exclude_patterns = data["patterns"].get("exclude", [])
-            config.include_patterns = data["patterns"].get("include", [])
-            config.use_gitignore = data["patterns"].get("use_gitignore", False)
-            config.use_default_excludes = data["patterns"].get("use_default_excludes", True)
-
-        if "output" in data:
-            config.pretty = data["output"].get("pretty", False)
-            config.output_mode = data["output"].get("mode", "concat")
-            config.add_header = data["output"].get("add_header", True)
-
-        if "files" in data:
-            config.include_binary = data["files"].get("include_binary", False)
-            config.encoding = data["files"].get("encoding", "utf-8")
-            config.errors = data["files"].get("errors", "replace")
-            config.max_scan_bytes = data["files"].get("max_scan_bytes", 65536)
-
-        if "misc" in data:
-            config.show_skipped = data["misc"].get("show_skipped", False)
-            config.verbose = data["misc"].get("verbose", False)
-
-        return config
-    except Exception as e:
-        print(f"Warning: Failed to load config from {path}: {e}", file=sys.stderr)
-        return None
+        with path.open("rb") as stream:
+            data = tomllib.load(stream)
+        unknown = data.keys() - CONFIG_SECTIONS.keys()
+        if unknown:
+            raise ValueError(f"unknown sections: {', '.join(sorted(unknown))}")
+        values = {}
+        defaults = Config()
+        for section, names in CONFIG_SECTIONS.items():
+            for key, value in data.get(section, {}).items():
+                if key not in names:
+                    raise ValueError(f"unknown setting {section}.{key}")
+                name = names[key]
+                expected = type(getattr(defaults, name))
+                if type(value) is not expected or (expected is list and any(not isinstance(item, str) for item in value)):
+                    raise ValueError(f"invalid value for {section}.{key}")
+                values[name] = value
+        if values.get("output_mode", "concat") not in {"concat", "list", "tree"}:
+            raise ValueError("output.mode must be concat, list, or tree")
+        if values.get("max_scan_bytes", 65536) <= 0:
+            raise ValueError("files.max_scan_bytes must be positive")
+        return values
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ValueError(f"Failed to load config from {path}: {exc}") from exc
 
 
-def find_global_config() -> Config | None:
+def find_global_config() -> dict:
     """Find and load global config from ~/.config/concat/config.toml"""
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     global_config_path = config_home / "concat" / "config.toml"
     return load_toml_config(global_config_path)
 
 
-def find_project_config(start_dir: Path = None) -> Config | None:
+def find_project_config(start_dir: Path | None = None) -> dict:
     """Walk up from start_dir to find project-level .concatconfig or .concat.toml"""
     if start_dir is None:
         start_dir = Path.cwd()
@@ -326,24 +283,16 @@ def find_project_config(start_dir: Path = None) -> Config | None:
             break
         current = parent
 
-    return None
+    return {}
 
 
 def load_config() -> Config:
-    """Load configuration from global and project configs, merging them."""
-    config = Config()
-
-    # Load global config
-    global_config = find_global_config()
-    if global_config:
-        config = config.merge(global_config)
-
-    # Load project config (takes precedence)
-    project_config = find_project_config()
-    if project_config:
-        config = config.merge(project_config)
-
-    return config
+    """Apply global then project settings; pattern lists are additive."""
+    values = {}
+    for layer in (find_global_config(), find_project_config()):
+        for name, value in layer.items():
+            values[name] = [*values.get(name, []), *value] if isinstance(value, list) else value
+    return Config(**values)
 
 
 # =============================================================================
@@ -352,54 +301,15 @@ def load_config() -> Config:
 
 
 class PatternMatcher:
-    """Handles gitignore-style pattern matching."""
+    """Match all paths relative to one explicit base using gitignore syntax."""
 
-    def __init__(self, patterns: list[str], base_dir: str = None):
-        self.base_dir = Path(base_dir) if base_dir else Path.cwd()
-        self.patterns = patterns
-
-        if pathspec:
-            # Use pathspec for proper gitignore semantics
-            self.spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
-        else:
-            # Fallback to simple fnmatch
-            self.spec = None
+    def __init__(self, patterns: list[str], base_dir: str | None = None):
+        self.base_dir = Path(base_dir or Path.cwd()).absolute()
+        self.spec = pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
     def matches(self, path: str) -> bool:
-        """Check if path matches any pattern."""
-        if self.spec:
-            # pathspec handles relative paths properly
-            try:
-                rel_path = Path(path).relative_to(self.base_dir)
-            except ValueError:
-                rel_path = Path(path)
-            return self.spec.match_file(str(rel_path))
-        else:
-            # Fallback matching
-            return self._fallback_match(path)
-
-    def _fallback_match(self, path: str) -> bool:
-        """Simple fnmatch-based fallback when pathspec unavailable."""
-        rel = os.path.relpath(path)
-        abs_path = os.path.abspath(path)
-        basename = os.path.basename(path)
-
-        for pat in self.patterns:
-            # Negation patterns (not perfect, but reasonable)
-            if pat.startswith("!"):
-                continue  # Skip negations in fallback mode
-
-            # Directory patterns
-            if pat.endswith("/"):
-                folder = pat[:-1]
-                if folder in Path(rel).parts:
-                    return True
-
-            # Standard glob matching
-            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(basename, pat) or fnmatch.fnmatch(abs_path, pat):
-                return True
-
-        return False
+        relative = os.path.relpath(path, self.base_dir)
+        return self.spec.match_file(Path(relative).as_posix())
 
 
 # =============================================================================
@@ -437,11 +347,13 @@ def run_fd(base_args, paths, add_default_pattern=False, verbose=False):
 
     try:
         out = subprocess.run(cmd, capture_output=True, check=False)
-    except Exception as e:
+    except OSError as e:
         if verbose:
             print(f"fd invocation failed: {e}", file=sys.stderr)
         return None
 
+    if out.returncode:
+        raise RuntimeError(f"fd failed: {out.stderr.decode(errors='replace').strip()}")
     data = out.stdout.decode("utf-8", errors="replace")
     return [p for p in data.split("\0") if p]
 
@@ -610,12 +522,6 @@ def count_chars(path: str, encoding: str = "utf-8", errors: str = "replace") -> 
 
 def format_tree_output(files: list[str], config: Config):
     """Format output as a pretty tree with statistics."""
-    if not (Console and Tree):
-        # Fallback to simple list if rich not available
-        print("(Rich library not available, falling back to list view)", file=sys.stderr)
-        format_list_output(files, config)
-        return
-
     from rich import box
     from rich.columns import Columns
     from rich.console import Group
@@ -623,77 +529,36 @@ def format_tree_output(files: list[str], config: Config):
 
     console = Console()
 
-    # Build tree structure
-    tree_data = {}
-    total_lines = 0
-    total_chars = 0
-    file_stats = {}  # Store stats for percentage calculation
-
-    # First pass: collect stats and find max filename length per directory
+    file_stats = {}
     for fp in files:
-        rel_path = Path(os.path.relpath(fp))
-        parts = rel_path.parts
+        try:
+            with open(fp, encoding=config.encoding, errors=config.errors) as stream:
+                lines = chars = 0
+                for line in stream:
+                    lines += 1
+                    chars += len(line)
+            file_stats[fp] = {"lines": lines, "chars": chars}
+        except (OSError, UnicodeError) as exc:
+            print(f"Cannot read {fp}: {exc}", file=sys.stderr)
+            file_stats[fp] = {"lines": 0, "chars": 0}
+    total_lines = sum(stats["lines"] for stats in file_stats.values())
+    total_chars = sum(stats["chars"] for stats in file_stats.values())
 
-        line_count = count_lines(fp, config.encoding, config.errors)
-        char_count = count_chars(fp, config.encoding, config.errors)
-        total_lines += line_count
-        total_chars += char_count
-        file_stats[fp] = {"lines": line_count, "chars": char_count}
-
-        current = tree_data
-        for i, part in enumerate(parts):
-            if i == len(parts) - 1:
-                # Leaf (file)
-                current[part] = {"_type": "file", "_lines": line_count, "_chars": char_count, "_path": fp}
-            else:
-                # Directory
-                if part not in current:
-                    current[part] = {"_type": "dir"}
-                current = current[part]
-
-    # Render tree with percentages
-    def build_tree(node_dict, parent_tree=None):
-        # Filter out metadata keys and sort: directories first, then files
-        items = [(k, v) for k, v in node_dict.items() if not k.startswith("_")]
-        items.sort(key=lambda x: (x[1].get("_type") == "file", x[0]))
-
-        # Find max name length in this directory
-        max_name_len = max((len(k) for k, v in items if v.get("_type") == "file"), default=0)
-
-        for name, data in items:
-            if data.get("_type") == "file":
-                lines = data.get("_lines", 0)
-                chars = data.get("_chars", 0)
-                pct = (chars / total_chars * 100) if total_chars > 0 else 0
-
-                # Create label with padding to align stats in this directory
-                label = Text(name)
-                # Pad to max length + some extra spacing
-                padding_needed = max_name_len - len(name) + 4
-                label.append(" " * padding_needed)
-                label.append(f"{lines:>6,}L  ", style="dim yellow")
-                label.append(f"{chars:>9,}C  ", style="dim green")
-                label.append(f"{pct:>5.1f}%", style="bold magenta")
-                if parent_tree:
-                    parent_tree.add(label)
-            else:
-                # It's a directory (either explicit _type="dir" or just a dict)
-                if parent_tree:
-                    subtree = parent_tree.add(f"[bold blue]{name}/[/bold blue]")
-                else:
-                    subtree = Tree(f"[bold blue]{name}/[/bold blue]")
-                build_tree(data, subtree)
-                if parent_tree is None:
-                    return subtree
-
-    # Start from root
-    if len(tree_data) == 1:
-        root_name = list(tree_data.keys())[0]
-        root = Tree(f"[bold blue]{root_name}/[/bold blue]")
-        build_tree(tree_data[root_name], root)
-    else:
-        root = Tree("[bold blue].[/bold blue]")
-        build_tree(tree_data, root)
+    root = Tree(Text(".", style="bold blue"))
+    directories = {(): root}
+    for fp in sorted(files):
+        parts = Path(os.path.relpath(fp)).parts
+        for depth in range(1, len(parts)):
+            key = parts[:depth]
+            if key not in directories:
+                directories[key] = directories[key[:-1]].add(Text(parts[depth - 1] + "/", style="bold blue"))
+        stats = file_stats[fp]
+        pct = stats["chars"] / total_chars * 100 if total_chars else 0
+        label = Text(parts[-1])
+        label.append(f"    {stats['lines']:,}L  ", style="dim yellow")
+        label.append(f"{stats['chars']:,}C  ", style="dim green")
+        label.append(f"{pct:.1f}%", style="bold magenta")
+        directories[parts[:-1]].add(label)
 
     # Build top contributors panel
     top_contributors = []
@@ -823,9 +688,6 @@ def concatenate_files(files: list[str], config: Config) -> str:
         if rel in seen:
             continue
         seen.add(rel)
-
-        # Print path to stdout (for list mode)
-        print(rel)
 
         if not os.path.isfile(fp):
             print(f"Error: '{rel}' is not a regular file", file=sys.stderr)
@@ -965,7 +827,10 @@ Config files:
     args = parser.parse_args()
 
     # Load config from files
-    config = load_config()
+    try:
+        config = load_config()
+    except ValueError as exc:
+        parser.error(str(exc))
 
     # Override config with CLI arguments
     if args.exclude:
@@ -1008,9 +873,14 @@ Config files:
     exclude_patterns.extend(config.exclude_patterns)
 
     # Discover files
-    files = gather_with_fd(inputs, exclude_patterns, config.use_gitignore, verbose=config.verbose)
+    try:
+        files = gather_with_fd(inputs, exclude_patterns, config.use_gitignore, verbose=config.verbose)
+    except RuntimeError as exc:
+        parser.error(str(exc))
 
     if files is None:
+        if config.use_gitignore:
+            parser.error("--gitignore requires fd or fdfind; refusing to scan without ignore rules")
         if config.verbose:
             print("fd not found — falling back to Python scanning.", file=sys.stderr)
         exclude_matcher = PatternMatcher(exclude_patterns)
@@ -1033,19 +903,13 @@ Config files:
         sys.exit(3)
 
     # Output based on mode
-    if config.output_mode == "tree" and config.pretty:
+    if config.output_mode == "tree":
         # Show pretty tree in terminal
         format_tree_output(files, config)
 
         # But still copy concatenated content to clipboard (unless --terminal)
         if not args.terminal:
-            # Suppress the file listing during concatenation for clipboard
-            import io
-
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()  # Suppress file listing
             content = concatenate_files(files, config)
-            sys.stdout = old_stdout
 
             try:
                 copy_to_all_clipboards(content)

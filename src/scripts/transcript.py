@@ -8,7 +8,6 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 from threading import Lock
 
 import yt_dlp
@@ -19,8 +18,7 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
 )
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
-from scripts.clipboard import copy_to_all_clipboards
+from .clipboard import copy_to_all_clipboards
 
 # Lock for thread-safe printing
 print_lock = Lock()
@@ -102,7 +100,7 @@ def process_video(index, raw_url):
     if not video_id:
         result = f"{raw_url}:\n(Invalid YouTube URL)\n"
         with print_lock:
-            print(f"[{index + 1}] Invalid YouTube URL")
+            print(f"[{index + 1}] Invalid YouTube URL", file=sys.stderr)
         return index, result
 
     # Sequentially fetch title (cheap) then transcript (dominates runtime)
@@ -112,7 +110,7 @@ def process_video(index, raw_url):
     result = f"{title}:\n{transcript}\n"
 
     with print_lock:
-        print(f"[{index + 1}] Completed: {title}")
+        print(f"[{index + 1}] Completed: {title}", file=sys.stderr)
 
     return index, result
 
@@ -135,15 +133,17 @@ def main():
     parser.add_argument("urls", nargs="*", help="YouTube video URLs (if empty, reads from stdin).")
 
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be positive")
 
     # Gather URLs from stdin if no args and input is piped
     urls = [line.strip() for line in sys.stdin if line.strip()] if not args.urls and not sys.stdin.isatty() else args.urls
 
     if not urls:
-        print("No YouTube URLs provided.")
+        print("No YouTube URLs provided.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Processing {len(urls)} video(s) with {args.workers} workers...")
+    print(f"Processing {len(urls)} video(s) with {args.workers} workers...", file=sys.stderr)
 
     # Process videos in parallel
     results = [None] * len(urls)  # Pre-allocate list to maintain order
@@ -161,11 +161,10 @@ def main():
     final_result = "\n".join(results)
 
     if args.terminal:
-        print("\n" + "=" * 50)
         print(final_result)
     else:
         copy_to_all_clipboards(final_result)
-        print("\nOutput copied to clipboard.")
+        print("\nOutput copied to clipboard.", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 import platform
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,10 +11,12 @@ import typer
 from bs4 import BeautifulSoup, Tag
 from markdown_it import MarkdownIt
 
+from .clipboard import ClipboardError, copy_linux
+
 app = typer.Typer(help="Render a Markdown file to styled HTML and copy it to the clipboard.")
 
 
-class MdclipError(Exception):
+class MdclipError(ClipboardError):
     """Raised when the clipboard operation fails."""
 
 
@@ -33,11 +34,6 @@ TITLE_OPTION = typer.Option(None, "--title", help="Override the HTML document ti
 PRINT_HTML_OPTION = typer.Option(False, "--print-html", help="Print the generated HTML instead of copying it.")
 
 HTML_MIME = "text/html"
-LINUX_BACKENDS = ("wl-copy", "xclip", "xsel")
-BACKEND_ALIASES = {
-    **{backend: backend for backend in LINUX_BACKENDS},
-    "wlcopy": "wl-copy",
-}
 MARKDOWN_RENDERER = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"])
 PLAIN_TEXT_DOUBLE_BREAK_TAGS = ("p", "div", "pre", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6")
 PLAIN_TEXT_SINGLE_BREAK_TAGS = ("li", "tr")
@@ -165,57 +161,11 @@ def _build_html_document(fragment: str, title: str) -> str:
     )
 
 
-def _pipe_text(cmd: list[str], content: str) -> None:
-    subprocess.run(cmd, check=True, input=content.encode("utf-8"))
-
-
-def _copy_linux(html: str, preferred: str | None) -> str:
-    candidates = [preferred] if preferred else list(LINUX_BACKENDS)
-
-    for backend in candidates:
-        if not backend:
-            continue
-
-        if backend == "wl-copy":
-            if shutil.which("wl-copy"):
-                _pipe_text(["wl-copy", "--type", HTML_MIME], html)
-                _pipe_text(["wl-copy", "--primary", "--type", HTML_MIME], html)
-                return "wl-copy"
-
-        elif backend == "xclip":
-            if shutil.which("xclip"):
-                _pipe_text(["xclip", "-selection", "clipboard", "-t", HTML_MIME, "-i"], html)
-                _pipe_text(["xclip", "-selection", "primary", "-t", HTML_MIME, "-i"], html)
-                return "xclip"
-
-        elif backend == "xsel":
-            if shutil.which("xsel"):
-                _pipe_text(["xsel", "--clipboard", "--input", "--mime-type", HTML_MIME], html)
-                _pipe_text(["xsel", "--primary", "--input", "--mime-type", HTML_MIME], html)
-                return "xsel"
-
-        else:
-            raise MdclipError(f"Unknown Linux backend '{backend}'. Supported: wl-copy, xclip, xsel.")
-
-    if preferred:
-        raise MdclipError(f"Requested backend '{preferred}' is unavailable. Install it and retry.")
-
-    available = [cmd for cmd in LINUX_BACKENDS if shutil.which(cmd)]
-    hint = "Install wl-clipboard or xclip." if not available else f"Available backends: {', '.join(available)}"
-    raise MdclipError(f"No clipboard backend found. {hint}")
-
-
 def _copy_html_to_clipboard(html: str, plain_text: str, backend: str | None) -> str:
     system = platform.system()
-    normalized = None
-    if backend:
-        normalized = BACKEND_ALIASES.get(backend.lower())
-        if not normalized:
-            raise MdclipError(f"Unknown backend '{backend}'.")
-
     if system == "Linux":
-        return _copy_linux(html, normalized)
-    if normalized:
+        return copy_linux(html.encode("utf-8"), HTML_MIME, backend)
+    if backend:
         raise MdclipError("Backend selection is only supported on Linux rich-clipboard backends.")
 
     pyperclip.copy(plain_text)
@@ -240,7 +190,7 @@ def run(
 
     try:
         backend_used = _copy_html_to_clipboard(html_document, plain_text, backend)
-    except MdclipError as exc:
+    except ClipboardError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from None
     except pyperclip.PyperclipException as exc:

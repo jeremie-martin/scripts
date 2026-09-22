@@ -28,12 +28,6 @@ FORCE_PW=0
 USE_MUX=1
 SSH_OPTS=()
 
-# Connection sharing (reduces repeated prompts across ssh/rsync/ssh)
-if [[ "${USE_MUX}" -eq 1 ]]; then
-  mkdir -p "$HOME/.ssh"
-  SSH_OPTS+=( -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$HOME/.ssh/cm-%r@%h:%p" )
-fi
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir)           REMOTE_DIR="$2"; shift 2;;
@@ -46,6 +40,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Connection sharing is configured after parsing --no-mux.
+if [[ "${USE_MUX}" -eq 1 ]]; then
+  mkdir -p "$HOME/.ssh"
+  SSH_OPTS+=( -o ControlMaster=auto -o ControlPersist=60 -o ControlPath="$HOME/.ssh/cm-%r@%h:%p" )
+fi
+
 # Force a password prompt (disable pubkey) if requested
 if [[ "${FORCE_PW}" -eq 1 ]]; then
   SSH_OPTS+=( -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive )
@@ -57,12 +57,15 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 # Resolve remote home and expand leading ~ in REMOTE_DIR locally
 # (Tilde does not expand inside quotes on the remote, so make it absolute.)
 REMOTE_HOME=$(ssh "${SSH_OPTS[@]}" "${REMOTE}" 'printf %s "$HOME"')
-if [[ "${REMOTE_DIR}" == ~* ]]; then
+if [[ "${REMOTE_DIR}" == '~' || "${REMOTE_DIR}" == '~/'* ]]; then
   REMOTE_DIR="${REMOTE_DIR/#\~/${REMOTE_HOME}}"
 fi
 
 # Ensure remote dir exists (ALLOW password prompt)
-ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p \"${REMOTE_DIR}\""
+printf -v REMOTE_DIR_QUOTED '%q' "$REMOTE_DIR"
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  ssh "${SSH_OPTS[@]}" "${REMOTE}" "mkdir -p -- ${REMOTE_DIR_QUOTED}"
+fi
 
 # Build rsync (use same SSH options)
 RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
@@ -75,7 +78,7 @@ RSYNC_SSH=(ssh "${SSH_OPTS[@]}")
 # -z  compress
 # --delete  remove remote files that no longer exist locally
 # IMPORTANT: we intentionally DO NOT preserve times (-t) and DO NOT --delete-excluded
-RSYNC_FLAGS=(-rlpDz --delete --partial --inplace
+RSYNC_FLAGS=(-rlpDz --protect-args --delete --partial --inplace
              --info=stats2,progress2 --human-readable
              --filter=':- .gitignore' --exclude='.git/')
 
@@ -83,6 +86,11 @@ RSYNC_FLAGS=(-rlpDz --delete --partial --inplace
 
 # Trailing slash on source to copy contents into target dir
 rsync -e "${RSYNC_SSH[*]}" "${RSYNC_FLAGS[@]}" "${ROOT}/" "${REMOTE}:${REMOTE_DIR}/"
+
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "Dry run complete; no remote installation performed."
+  exit 0
+fi
 
 # Post-sync: ensure uv exists and run make targets (which will also ensure PATH in rc files)
 ssh "${SSH_OPTS[@]}" "${REMOTE}" "bash -s -l" <<EOF
@@ -118,7 +126,7 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="\$HOME/.local/bin:\$PATH"
 fi
 
-cd "${REMOTE_DIR}"
+cd -- ${REMOTE_DIR_QUOTED}
 echo '📦 make sync'
 make sync
 echo '🔄 make retool'

@@ -7,17 +7,18 @@ import io
 import json
 import os
 import subprocess
-import tkinter as tk
+from contextlib import suppress
 from dataclasses import dataclass, field
-from tkinter import font as tkfont
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar
 
-import mss
-import pyautogui
 import typer
-from PIL import Image, ImageFilter
 
-from scripts.clipboard import copy_to_all_clipboards
+if TYPE_CHECKING:
+    import tkinter as tk
+
+    from PIL import Image
+
+from scripts.clipboard import ClipboardError, copy_linux, copy_to_all_clipboards
 
 app = typer.Typer(help="Screenshot tool with full-desktop, single-monitor, and interactive-selection modes.")
 
@@ -77,6 +78,8 @@ def _pil_to_tkphoto(image: Image.Image, master: tk.Misc | None = None) -> tk.Pho
     PPM is uncompressed and natively decoded by Tk's C layer — no PNG
     compression overhead and no base64 encoding needed.
     """
+    import tkinter as tk
+
     buf = io.BytesIO()
     image.save(buf, format="PPM")
     return tk.PhotoImage(data=buf.getvalue(), master=master)
@@ -97,15 +100,11 @@ def _save_image(img: Image.Image, prefix: str = "screenshot", directory: str | N
 def _copy_to_clipboard(img: Image.Image) -> None:
     output = io.BytesIO()
     img.save(output, format="PNG")
-    data = output.getvalue()
     try:
-        process = subprocess.Popen(
-            ["xclip", "-selection", "clipboard", "-t", "image/png"],
-            stdin=subprocess.PIPE,
-        )
-        process.communicate(data)
-    except Exception as e:
-        typer.echo(f"Failed to copy image to clipboard: {e}")
+        copy_linux(output.getvalue(), "image/png")
+    except ClipboardError as e:
+        typer.echo(f"Failed to copy image to clipboard: {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 def _copy_text_to_clipboard(text: str) -> None:
@@ -113,7 +112,8 @@ def _copy_text_to_clipboard(text: str) -> None:
     try:
         copy_to_all_clipboards(text)
     except Exception as e:
-        typer.echo(f"Failed to copy text to clipboard: {e}")
+        typer.echo(f"Failed to copy text to clipboard: {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
@@ -123,7 +123,7 @@ def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
         from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
     except ImportError:
         typer.echo("OCR needs the 'ocr' extra. Reinstall with: make retool-ocr")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     model_id = "lightonai/LightOnOCR-2-1B"
     use_cuda = torch.cuda.is_available()
@@ -145,17 +145,18 @@ def _run_ocr(image_path: str, max_new_tokens: int = 4096) -> str:
 
 
 def _notify(summary: str, body: str = "") -> None:
-    try:
+    with suppress(FileNotFoundError):
         subprocess.Popen(["notify-send", "-a", "screenshot", summary, body])
-    except FileNotFoundError:
-        pass
 
 
 @app.command()
 def full(
-    dir: Optional[str] = DIR_OPTION,
+    dir: str | None = DIR_OPTION,
 ) -> None:
     """Capture the full desktop (all monitors)."""
+    import mss
+    from PIL import Image
+
     with mss.mss() as sct:
         monitor = sct.monitors[0]
         sct_img = sct.grab(monitor)
@@ -169,9 +170,12 @@ def full(
 @app.command()
 def monitor(
     index: int = typer.Argument(..., help="Monitor index (starting at 1)."),
-    dir: Optional[str] = DIR_OPTION,
+    dir: str | None = DIR_OPTION,
 ) -> None:
     """Capture a single monitor by index."""
+    import mss
+    from PIL import Image
+
     with mss.mss() as sct:
         monitors = sct.monitors
         if index < 1 or index >= len(monitors):
@@ -206,6 +210,11 @@ class SelectionTool:
     _BLUR_RADIUS = 7
 
     def __init__(self, monitor: dict, original_img: Image.Image, save_dir: str | None) -> None:
+        import tkinter as tk
+        from tkinter import font as tkfont
+
+        from PIL import ImageFilter
+
         self.monitor = monitor
         self.orig_img = original_img
         self.save_dir = save_dir
@@ -239,9 +248,7 @@ class SelectionTool:
             start_x = (self.width - rect_w) // 2
             start_y = (self.height - rect_h) // 2
             self.rect = [start_x, start_y, start_x + rect_w, start_y + rect_h]
-        self.rect_id = self.canvas.create_rectangle(
-            self.rect, outline=self._OUTLINE_COLOR, width=self._OUTLINE_WIDTH
-        )
+        self.rect_id = self.canvas.create_rectangle(self.rect, outline=self._OUTLINE_COLOR, width=self._OUTLINE_WIDTH)
         self.clear_img_id = self.canvas.create_image(self.rect[0], self.rect[1], anchor="nw")
         self.selection_photo: tk.PhotoImage | None = None
 
@@ -256,9 +263,7 @@ class SelectionTool:
         base_family = tkfont.nametofont("TkDefaultFont", root=self.root).actual("family")
         self._label_font = tkfont.Font(root=self.root, family=base_family, size=-self._label_font_px)
         self.size_bg_id = self.canvas.create_rectangle(0, 0, 0, 0, fill="black", outline="")
-        self.size_text_id = self.canvas.create_text(
-            0, 0, anchor="nw", fill="white", font=self._label_font, text=""
-        )
+        self.size_text_id = self.canvas.create_text(0, 0, anchor="nw", fill="white", font=self._label_font, text="")
 
         self.update_clear_area()
 
@@ -310,8 +315,12 @@ class SelectionTool:
         r = self._HANDLE_RADIUS
         for action, (cx, cy) in self._handle_positions().items():
             hid = self.canvas.create_oval(
-                cx - r, cy - r, cx + r, cy + r,
-                outline=self._OUTLINE_COLOR, width=self._OUTLINE_WIDTH,
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                outline=self._OUTLINE_COLOR,
+                width=self._OUTLINE_WIDTH,
             )
             self.handles[action] = hid
 
@@ -326,6 +335,8 @@ class SelectionTool:
                 self.canvas.itemconfig(hid, fill="", outline=self._OUTLINE_COLOR)
 
     def update_clear_area(self) -> None:
+        import tkinter as tk
+
         left, top, right, bottom = self.rect
         left, top = max(0, left), max(0, top)
         right, bottom = min(self.width, right), min(self.height, bottom)
@@ -335,9 +346,17 @@ class SelectionTool:
         # Use Tk-native photo copy instead of PIL crop → encode per frame
         self.selection_photo = tk.PhotoImage(width=w, height=h, master=self.root)
         self.selection_photo.tk.call(
-            self.selection_photo, "copy", self.orig_photo,
-            "-from", left, top, right, bottom,
-            "-to", 0, 0,
+            self.selection_photo,
+            "copy",
+            self.orig_photo,
+            "-from",
+            left,
+            top,
+            right,
+            bottom,
+            "-to",
+            0,
+            0,
         )
         self.canvas.coords(self.clear_img_id, left, top)
         self.canvas.itemconfig(self.clear_img_id, image=self.selection_photo)
@@ -434,11 +453,14 @@ class SelectionTool:
         self.drag.action = None
 
     _ARROW_DELTAS: ClassVar[dict[str, tuple[int, int]]] = {
-        "Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1),
+        "Left": (-1, 0),
+        "Right": (1, 0),
+        "Up": (0, -1),
+        "Down": (0, 1),
     }
-    _ARROW_TICK_MS = 16       # ~60fps motion while keys are held
-    _ARROW_MAX_STEP = 30      # px per tick cap (before the Shift multiplier)
-    _ARROW_SHIFT_MULT = 6     # Shift → jump straight to fast
+    _ARROW_TICK_MS = 16  # ~60fps motion while keys are held
+    _ARROW_MAX_STEP = 30  # px per tick cap (before the Shift multiplier)
+    _ARROW_SHIFT_MULT = 6  # Shift → jump straight to fast
 
     def on_key(self, event: tk.Event) -> None:
         if event.keysym in ("Return", "space"):
@@ -539,18 +561,18 @@ class SelectionTool:
 
 @app.command()
 def selection(
-    dir: Optional[str] = DIR_OPTION,
+    dir: str | None = DIR_OPTION,
 ) -> None:
     """Interactive selection mode — draws on the active monitor."""
+    import mss
+    import pyautogui
+    from PIL import Image
+
     mouse_x, mouse_y = pyautogui.position()
     with mss.mss() as sct:
         monitors = sct.monitors[1:]
         active_monitor = next(
-            (
-                m
-                for m in monitors
-                if m["left"] <= mouse_x < m["left"] + m["width"] and m["top"] <= mouse_y < m["top"] + m["height"]
-            ),
+            (m for m in monitors if m["left"] <= mouse_x < m["left"] + m["width"] and m["top"] <= mouse_y < m["top"] + m["height"]),
             monitors[0],
         )
         sct_img = sct.grab(active_monitor)
@@ -562,9 +584,9 @@ def selection(
 @app.callback(invoke_without_command=True)
 def _legacy_mode(
     ctx: typer.Context,
-    mode: Optional[str] = typer.Option(None, "--mode", hidden=True),
-    monitor_idx: Optional[int] = typer.Option(None, "--monitor", hidden=True),
-    dir: Optional[str] = DIR_OPTION,
+    mode: str | None = typer.Option(None, "--mode", hidden=True),
+    monitor_idx: int | None = typer.Option(None, "--monitor", hidden=True),
+    dir: str | None = DIR_OPTION,
 ) -> None:
     """Backward-compatible --mode flag."""
     if ctx.invoked_subcommand is not None or mode is None:
@@ -584,7 +606,13 @@ def _legacy_mode(
 
 
 def main() -> None:
-    app()
+    try:
+        app()
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"mss", "PIL", "pyautogui", "tkinter", "_tkinter"}:
+            raise
+        typer.echo("Screenshot capture needs the screenshot extra (uv sync --extra screenshot) and system Tk support.", err=True)
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

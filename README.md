@@ -17,8 +17,8 @@ uvx --from git+ssh://git@github.com/jeremie-martin/scripts.git concat …
 
 ### Develop locally
 ```bash
-# Sync a dev venv (all extras)
-uv sync
+# Sync a dev venv with linting and tests
+uv sync --extra dev
 
 # Install the tools in EDITABLE mode — edits to existing commands are live, no reinstall
 make retool          # adds the screenshot extra
@@ -30,8 +30,8 @@ Run any console script inside the project env (no manual activate needed):
 
 ```bash
 uv run concat …
-uv run transcript …    # needs --extra media at sync time
-uv run ffcut …         # needs ffmpeg on PATH; yt-dlp provided by [media]
+uv run transcript …    # transcript dependencies are included in the base install
+uv run ffcut …         # needs ffmpeg on PATH; yt-dlp is included
 uv run gdiffpath …
 uv run import-photos …
 uv run mdclip notes.md  # copies a rendered HTML preview of the Markdown to the clipboard
@@ -56,6 +56,35 @@ uv run scripts version    # quick sanity check the install
 
 Security note for `concat`: by default, common secret files (e.g. .env, keys, certs) are excluded. Use `--no-default-excludes` to include them.
 
+`concat` applies defaults, global config, project config, then command-line options.
+Explicit project values override global values, including `false` and values equal
+to built-in defaults; include/exclude lists accumulate. Invalid config is an error.
+`--gitignore` requires `fd` or `fdfind`; the tool refuses to silently skip ignore
+rules when neither is available. Terminal concatenation emits only the requested
+content and optional filename headers.
+
+`scripts run` dispatches this package's installed entry points directly, so it
+works without individual command shims on PATH. It accepts only commands shown
+by `scripts list`.
+
+`quick` project names start with a letter and contain letters, digits, hyphens,
+or underscores. `--no-git` applies to Python projects as well. Its stdout contains
+only the created path, for use in command substitution.
+
+### Verification
+
+```bash
+uv run --extra dev pytest -q
+uv run --extra dev ruff check .
+uv build
+```
+
+The tests cover command dispatch, configuration precedence, clipboard transport,
+file filtering, Git paths, scaffolding, media command construction, and deployment
+dry-run behavior. Desktop services and network downloads still require manual
+checks on the target machine. See [design notes](docs/design.md) for the boundaries
+and remaining review areas.
+
 ### (Optional) Non-uv environments
 Generate a `requirements.txt` from the lock for environments still on pip:
 ```bash
@@ -65,7 +94,8 @@ Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
 
 ### Platform notes
 
-- mdclip: rich HTML clipboard output is implemented for Linux backends (`wl-copy`, `xclip`, `xsel`). Other platforms currently fall back to plain text.
+- Linux clipboard commands share backend selection: prefer `wl-copy` in a Wayland session, otherwise X11 tools. HTML and images require `wl-copy` or `xclip`; `xsel` supports plain text only. Explicit `--backend` requests never silently select a different backend.
+- mdclip: rich HTML clipboard output is implemented on Linux. Other platforms currently fall back to plain text.
 - ffcut: `--quiet` suppresses ffmpeg/yt-dlp output.
 - import-photos: `--symlinks` on Windows may require Developer Mode or admin privileges for symlink creation.
 
@@ -92,3 +122,7 @@ What it does:
 * bootstraps `uv` on the remote if missing
 * runs `make sync` and `make retool` remotely
 * repeatable and fast for subsequent updates
+
+`dev/ship.sh HOST --dry-run` performs the rsync preview without creating remote
+directories or running remote installation commands. It still needs SSH access
+to resolve the remote home directory and inspect the destination.

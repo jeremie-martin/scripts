@@ -10,7 +10,6 @@ dependencies = [
   "rich>=13.7.1",
   "yt-dlp>=2025.8.27",
   "pathspec>=0.12.1",
-  "tomli>=2.3.0",
   "youtube-transcript-api>=1.2.2",
   # mdclip renders Markdown → styled HTML for the clipboard
   "markdown-it-py>=3.0.0",
@@ -18,12 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Keep base install light; opt into features as needed
-media = [
-  "youtube-transcript-api>=1.2.2",
-  # keep flexible, yt-dlp updates frequently
-  "yt-dlp>=2024.10.0",
-]
+# Compatibility alias: media dependencies are included in the base install.
+media = []
 screenshot = [
   "mss>=9.0.1",
   "pyautogui>=0.9.54",
@@ -33,7 +28,7 @@ ocr = [
   "torch>=2.10.0",
   "transformers>=5.2.0",
 ]
-dev = ["ruff>=0.12.9"]
+dev = ["pytest>=8.3.0", "ruff>=0.12.9"]
 
 [project.scripts]
 # keep direct commands for muscle memory

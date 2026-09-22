@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def _write(path: Path, content: str) -> None:
 
 def _scaffold_python(dest: Path, name: str) -> None:
     # uv is the project's standard toolchain; let it lay out the project offline.
-    subprocess.run(["uv", "init", "--name", name, str(dest)], check=True)
+    subprocess.run(["uv", "init", "--vcs", "none", "--name", name, str(dest)], check=True, stdout=subprocess.DEVNULL)
 
 
 def _scaffold_node(dest: Path, name: str) -> None:
@@ -93,6 +94,9 @@ def run(
     force: bool = FORCE_OPTION,
 ) -> None:
     """Create a new project skeleton and print its path."""
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name):
+        typer.echo("Project name must start with a letter and contain only letters, digits, underscores, or hyphens.", err=True)
+        raise typer.Exit(2)
     flavour = type.lower()
     if flavour not in TYPES:
         typer.echo(f"Unknown type '{type}'. Choose one of: {', '.join(TYPES)}.", err=True)
@@ -106,7 +110,7 @@ def run(
 
     try:
         SCAFFOLDS[flavour](dest, name)
-    except subprocess.CalledProcessError as exc:
+    except (OSError, subprocess.CalledProcessError) as exc:
         typer.echo(f"Scaffold step failed: {exc}", err=True)
         raise typer.Exit(1) from exc
 
@@ -119,7 +123,11 @@ def run(
         _write(gitignore, GITIGNORE[flavour])
 
     if git and not (dest / ".git").exists():
-        subprocess.run(["git", "init", "-q", str(dest)], check=False)
+        try:
+            subprocess.run(["git", "init", "-q", str(dest)], check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            typer.echo(f"Git initialization failed: {exc}", err=True)
+            raise typer.Exit(1) from exc
 
     typer.echo(f"Created {flavour} project at {dest}", err=True)
     # Bare path on stdout so it's usable in a subshell, e.g. cd "$(quick foo)".
