@@ -1,0 +1,23 @@
+[project]
+name = "scripts-transcript"
+version = "0.1.0"
+description = "Fetch YouTube transcripts in input order."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["scripts-clipboard>=0.1.0","yt-dlp>=2025.8.27","youtube-transcript-api>=1.2.2"]
+
+[project.scripts]
+transcript = "scripts_transcript:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_transcript"]
+
+[tool.uv.sources]
+scripts-clipboard = { path = "../../packages/clipboard", editable = true }

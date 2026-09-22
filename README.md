@@ -1,128 +1,98 @@
-## Scripts — utility CLIs (modern Python package)
+# Personal command-line tools
 
-Requires Python 3.12+ (uv will manage a matching runtime).
+Small tools that live together but install independently. There is no umbrella
+application, shared runtime environment, or deployment service.
 
-### Install the tools (any machine with GitHub access)
-Install all the console commands onto your PATH straight from the repo:
-```bash
-uv tool install git+ssh://git@github.com/jeremie-martin/scripts.git
+| Tool | Purpose |
+| --- | --- |
+| [concat](tools/concat/) | Collect source files for a prompt |
+| [transcript](tools/transcript/) | Fetch video transcripts |
+| [ffcut](tools/ffcut/) | Download and cut media |
+| [gdiffpath](tools/gdiffpath/) | Inspect Git changes by path |
+| [clipmedia](tools/clipmedia/) | Copy media to the clipboard |
+| [mdclip](tools/mdclip/) | Copy Markdown as rich text |
+| [quick](tools/quick/) | Create a small project |
+| [screenshot](tools/screenshot/) | Capture screens, optionally with OCR |
+| [agent-export](tools/agent-export/) | Export agent conversations |
+| [image-tools](tools/image-tools/) | Image conversion: 2twi, 2work, img-twi, img-work |
+| [import-photos](tools/import-photos/) | Import photographs |
+| [ssh-clipboard](tools/ssh-clipboard/) | Transfer clipboard content over SSH |
+| [nsxiv-open-dir](tools/nsxiv-open-dir/) | Open an image's directory in nsxiv |
 
-# include the screenshot tool's deps
-uv tool install 'scripts[screenshot] @ git+ssh://git@github.com/jeremie-martin/scripts.git'
-```
-Run a one-off without installing:
-```bash
-uvx --from git+ssh://git@github.com/jeremie-martin/scripts.git concat …
-```
+## Install and update
 
-### Develop locally
-```bash
-# Sync a dev venv with linting and tests
-uv sync --extra dev
+For a Python tool, use its project directly:
 
-# Install the tools in EDITABLE mode — edits to existing commands are live, no reinstall
-make retool          # adds the screenshot extra
-make retool-ocr      # also pulls the heavy OCR extra (torch/transformers)
-```
-
-### Run
-Run any console script inside the project env (no manual activate needed):
-
-```bash
-uv run concat …
-uv run transcript …    # transcript dependencies are included in the base install
-uv run ffcut …         # needs ffmpeg on PATH; yt-dlp is included
-uv run gdiffpath …
-uv run import-photos …
-uv run mdclip notes.md  # copies a rendered HTML preview of the Markdown to the clipboard
-uv run screenshot selection  # interactive region capture (press 'o' for OCR if installed)
-# transcript copies to clipboard by default; use -t/--terminal to print
-uv run 2twi …           # ImageMagick (writes to twi/, dir must pre-exist)
-uv run img-twi …        # ImageMagick (writes to twi/, dir must pre-exist)
-uv run 2work …          # ImageMagick (writes to ../working/, dir must pre-exist)
-uv run img-work …       # ImageMagick (writes to ../working/, dir must pre-exist)
-                         # If ImageMagick is missing, the script exits with a helpful error.
+```sh
+uv tool install --editable ./tools/concat
+concat --help
 ```
 
-Umbrella wrapper (optional):
+Each tool has its own uv-managed environment. Source edits are live; after
+dependency or entry-point changes, repeat with `--reinstall`. Update this
+checkout with Git before reinstalling; `uv tool upgrade` does not pull Git.
+Uninstall with `uv tool uninstall scripts-concat`.
 
-```bash
-uv run scripts list
-uv run scripts run concat -- <args>
-uv run scripts version    # quick sanity check the install
+These are ordinary [uv tool installations](https://docs.astral.sh/uv/concepts/tools/),
+not a repository-specific installation mechanism.
+
+The optional Makefile runs these native commands:
+
+```sh
+make install-concat
+make install                      # all tools, without OCR
+make install-screenshot-ocr        # explicitly opt into heavy OCR dependencies
 ```
 
-> Note: No `setup_scripts.sh` needed — entry points handle global shims.
+Standalone tools are symlinked into `uv tool dir --bin`. Set `BINDIR` to
+override it. These Make targets require GNU ln and refuse existing unrelated
+files or links. Remove a standalone tool's symlink to uninstall it.
+You can also link or copy the executable yourself; see its README.
+System programs such as ffmpeg and desktop clipboard utilities are not installed
+automatically.
 
-Security note for `concat`: by default, common secret files (e.g. .env, keys, certs) are excluded. Use `--no-default-excludes` to include them.
+If you previously installed the aggregate `scripts` package, follow
+[the migration instructions](docs/migration.md) first to avoid command collisions.
 
-`concat` applies defaults, global config, project config, then command-line options.
-Explicit project values override global values, including `false` and values equal
-to built-in defaults; include/exclude lists accumulate. Invalid config is an error.
-`--gitignore` requires `fd` or `fdfind`; the tool refuses to silently skip ignore
-rules when neither is available. Terminal concatenation emits only the requested
-content and optional filename headers.
+Python clipboard consumers declare the small [clipboard library](packages/clipboard/)
+as an editable relative-path dependency. Moving the checkout requires reinstalling.
+Omitting `--editable` alone does **not** detach that dependency; use wheels when
+you need an installation independent of the checkout.
 
-`scripts run` dispatches this package's installed entry points directly, so it
-works without individual command shims on PATH. It accepts only commands shown
-by `scripts list`.
+## Occasional installation without Git access
 
-`quick` project names start with a letter and contain letters, digits, hyphens,
-or underscores. `--no-git` applies to Python projects as well. Its stdout contains
-only the created path, for use in command substitution.
+Build the tool and its local library, then transfer the wheels:
 
-### Verification
-
-```bash
-uv run --extra dev pytest -q
-uv run --extra dev ruff check .
-uv build
+```sh
+uv build packages/clipboard --out-dir dist
+uv build tools/concat --out-dir dist
+# On the other machine, with transferred wheels in ./wheels:
+uv tool install --find-links ./wheels ./wheels/scripts_concat-0.1.0-py3-none-any.whl
 ```
 
-The tests cover command dispatch, configuration precedence, clipboard transport,
-file filtering, Git paths, scaffolding, media command construction, and deployment
-dry-run behavior. Desktop services and network downloads still require manual
-checks on the target machine. See [design notes](docs/design.md) for the boundaries
-and remaining review areas.
+Use `--reinstall` to replace an existing same-version installation. Tools without
+the clipboard dependency need only their own wheel. Third-party dependencies
+still require network access; a fully offline install also needs compatible
+dependency wheels and an available Python interpreter, using
+`--offline --no-index --find-links ./wheels`. Standalone tools can simply be
+copied. There is no special remote deployment protocol.
 
-### (Optional) Non-uv environments
-Generate a `requirements.txt` from the lock for environments still on pip:
-```bash
-uv export --format requirements-txt -o requirements.txt   # from uv.lock
-```
-Then: `pip install -r requirements.txt`. (Prefer `uv sync` for day-to-day.)
+## Develop and verify
 
-### Platform notes
-
-- Linux clipboard commands share backend selection: prefer `wl-copy` in a Wayland session, otherwise X11 tools. HTML and images require `wl-copy` or `xclip`; `xsel` supports plain text only. Explicit `--backend` requests never silently select a different backend.
-- mdclip: rich HTML clipboard output is implemented on Linux. Other platforms currently fall back to plain text.
-- ffcut: `--quiet` suppresses ffmpeg/yt-dlp output.
-- import-photos: `--symlinks` on Windows may require Developer Mode or admin privileges for symlink creation.
-
-### Deploy to a machine with no GitHub access (fallback)
-
-If the target can't reach GitHub, push the repo over SSH instead of installing from git.
-From your dev machine, rsync the repo to the target host and auto-install the `scripts` tool:
-
-```bash
-# push to default ~/.scripts on the host
-dev/ship.sh ability@10.250.9.130
-
-# or with a custom directory
-dev/ship.sh ability@10.250.9.130 --dir ~/.custom-scripts
-
-# Makefile wrapper
-make ship HOST=ability@10.250.9.130
-make ship HOST=ability@10.250.9.130 DIR=~/.custom-scripts
+```sh
+uv run --project tools/concat --locked pytest tools/concat/tests
+make lint
+make test
+make test-installation
+make build
 ```
 
-What it does:
+Development environments and lockfiles belong to each project. Lockfiles govern
+`uv run --locked`, not `uv tool install`. Installation tests build and install
+tools in temporary directories, independently of the live installation.
+`make check` runs all checks. Tests do not require a live desktop or remote host.
 
-* rsyncs the project (respects `.gitignore`, excludes `.venv/`, `.git/`, etc.)
-* bootstraps `uv` on the remote if missing
-* runs `make sync` and `make retool` remotely
-* repeatable and fast for subsequent updates
-
-`dev/ship.sh HOST --dry-run` performs the rsync preview without creating remote
-directories or running remote installation commands. It still needs SSH access
-to resolve the remote home directory and inspect the destination.
+Add a small tool with its source, README, dependencies (if any), and tests.
+Choose the simplest native installation: a symlink, `uv tool install`, or
+`go install` for a Go project. There is no mandatory CLI framework or registry.
+Large applications belong in their own repositories. See [design notes](docs/design.md).

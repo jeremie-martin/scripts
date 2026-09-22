@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Copy the local text clipboard to a desktop reached over SSH."""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+class ClipboardError(Exception):
+    pass
+
+
+def installed(name):
+    return shutil.which(name) is not None
+
+
+def run_clipboard(command, env, data=None):
+    # Clipboard owners can outlive their launcher. Never give them captured
+    # stdout/stderr pipes that would keep communicate() waiting indefinitely.
+    with tempfile.TemporaryFile() as errors:
+        try:
+            result = subprocess.run(
+                command, input=data, env=env, timeout=10,
+                stdout=subprocess.PIPE if data is None else subprocess.DEVNULL,
+                stderr=errors, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise ClipboardError(f"{command[0]} timed out") from None
+        if result.returncode:
+            errors.seek(0)
+            detail = errors.read(4096).decode(errors="replace").strip()
+            raise ClipboardError(f"{command[0]} failed: {detail or result.returncode}")
+        return result.stdout
+
+
+def backend(kind):
+    if kind == "mac":
+        return ["pbpaste"], ["pbcopy"]
+    if kind == "wayland":
+        if not (installed("wl-paste") and installed("wl-copy")):
+            raise ClipboardError("Wayland requires wl-paste and wl-copy (wl-clipboard)")
+        return ["wl-paste", "--no-newline"], ["wl-copy"]
+    if installed("xclip"):
+        return (["xclip", "-selection", "clipboard", "-out"],
+                ["xclip", "-selection", "clipboard", "-in"])
+    if installed("xsel"):
+        return (["xsel", "--clipboard", "--output"],
+                ["xsel", "--clipboard", "--input"])
+    raise ClipboardError("X11 requires xclip or xsel")
+
+
+def x_displays(proc=Path("/proc")):
+    """Discover this user's local X servers; never use SSH-forwarded displays."""
+    candidates = {}
+    setup_displays = set()
+    for entry in proc.iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            if entry.stat().st_uid != os.getuid():
+                continue
+            fields = entry.joinpath("environ").read_bytes().split(b"\0")
+            env = dict(field.decode(errors="surrogateescape").split("=", 1)
+                       for field in fields if b"=" in field)
+            args = entry.joinpath("cmdline").read_bytes().decode(
+                errors="surrogateescape").split("\0")
+        except (OSError, ValueError):
+            continue
+        if env.get("GNOME_SETUP_DISPLAY"):
+            setup_displays.add(env["GNOME_SETUP_DISPLAY"].split(".")[0])
+        display, auth = env.get("DISPLAY", ""), env.get("XAUTHORITY", "")
+        if Path(args[0]).name in ("Xwayland", "Xorg", "X", "Xvnc", "Xtigervnc"):
+            display = next((arg for arg in args if re.fullmatch(r":\d+(?:\.\d+)?", arg)), display)
+            if "-auth" in args and args.index("-auth") + 1 < len(args):
+                auth = args[args.index("-auth") + 1]
+        if not re.fullmatch(r":\d+(?:\.\d+)?", display):
+            continue
+        # A stale process environment is not evidence of a live X server.
+        display = display.split(".")[0]
+        if not Path("/tmp/.X11-unix", "X" + display[1:]).exists():
+            continue
+        auth = auth if auth and Path(auth).is_file() else ""
+        candidates.setdefault(display, set()).add(auth)
+    # Mutter's private setup connection is not a second user desktop.
+    return {display: auths for display, auths in candidates.items()
+            if display not in setup_displays}
+
+
+def remote_session(options):
+    env = os.environ.copy()
+    # SSH login environment is not the user's desktop environment.
+    for key in ("DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY"):
+        env.pop(key, None)
+    if sys.platform == "darwin":
+        if options.display or options.wayland_display or options.xauthority:
+            raise ClipboardError("Display options apply only to Linux hosts")
+        return "mac", env, "macOS pasteboard"
+    if not sys.platform.startswith("linux"):
+        raise ClipboardError("Supported remote platforms: Linux and macOS")
+    runtime = Path(f"/run/user/{os.getuid()}")
+    env["XDG_RUNTIME_DIR"] = str(runtime)
+    if options.wayland_display:
+        env["WAYLAND_DISPLAY"] = options.wayland_display
+        return "wayland", env, options.wayland_display
+    displays = x_displays()
+    if options.display:
+        if not re.fullmatch(r":\d+(?:\.\d+)?", options.display):
+            raise ClipboardError("--display must name a local display, e.g. :0")
+        selected = options.display
+    else:
+        sockets = sorted(p.name for p in runtime.glob("wayland-*") if p.is_socket())
+        if len(sockets) > 1 or len(displays) > 1:
+            raise ClipboardError("Multiple desktops found; choose --display or --wayland-display")
+        if sockets and installed("wl-copy") and installed("wl-paste"):
+            env["WAYLAND_DISPLAY"] = sockets[0]
+            return "wayland", env, sockets[0]
+        if not displays:
+            if sockets:
+                raise ClipboardError("Wayland desktop found; install wl-clipboard on the host")
+            raise ClipboardError("No desktop found for the SSH user; specify --display and, if needed, --xauthority")
+        selected = next(iter(displays))
+    auths = displays.get(selected.split(".")[0], set()) - {""}
+    if options.xauthority:
+        env["XAUTHORITY"] = options.xauthority
+    elif len(auths) == 1:
+        env["XAUTHORITY"] = next(iter(auths))
+    elif len(auths) > 1:
+        raise ClipboardError("Multiple X authority files found; specify --xauthority")
+    env["DISPLAY"] = selected
+    return "x11", env, selected
+
+
+def local_clipboard():
+    env = os.environ.copy()
+    if sys.platform == "darwin":
+        kind = "mac"
+    elif env.get("WAYLAND_DISPLAY") and installed("wl-paste"):
+        kind = "wayland"
+    elif env.get("DISPLAY"):
+        kind = "x11"
+    else:
+        raise ClipboardError("No local desktop clipboard found")
+    reader, _ = backend(kind)
+    return run_clipboard(reader, env)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, epilog=(
+        "Requires Python 3 on both machines and clipboard utilities. "
+        "Supports Linux X11/Wayland and macOS. Transfers text, not images or files."))
+    parser.add_argument("host", nargs="?", help="SSH destination or configured alias")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--display", help="remote X11 display, e.g. :0")
+    group.add_argument("--wayland-display", help="remote Wayland socket, e.g. wayland-0")
+    parser.add_argument("--xauthority", help="remote X11 authentication file")
+    parser.add_argument("--receive", action="store_true", help=argparse.SUPPRESS)
+    options = parser.parse_args()
+    if options.xauthority and not options.display:
+        parser.error("--xauthority requires --display")
+    if options.receive:
+        kind, env, label = remote_session(options)
+        reader, writer = backend(kind)
+        data = sys.stdin.buffer.read()
+        run_clipboard(writer, env, data)
+        actual = run_clipboard(reader, env)
+        if actual != data:
+            raise ClipboardError("Remote clipboard read-back did not match; another application may have changed it")
+        print(json.dumps({"sha256": hashlib.sha256(actual).hexdigest(), "session": label}))
+        return
+    if not options.host or options.host.startswith("-"):
+        parser.error("provide an SSH destination, e.g. ssh-clipboard work")
+    data = local_clipboard()
+    # Send this same implementation as code, keeping clipboard bytes exclusively
+    # on stdin. No installation or clipboard files are needed on the remote host.
+    remote_args = ["python3", "-c", Path(__file__).read_text(), "--receive"]
+    for flag, value in (("--display", options.display),
+                        ("--wayland-display", options.wayland_display),
+                        ("--xauthority", options.xauthority)):
+        if value:
+            remote_args.extend([flag, value])
+    result = subprocess.run(
+        ["ssh", "-x", "-T", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=10",
+         options.host, shlex.join(remote_args)], input=data, stdout=subprocess.PIPE,
+    )
+    if result.returncode:
+        raise ClipboardError(f"Transfer failed (SSH/remote exit {result.returncode})")
+    try:
+        receipt = json.loads(result.stdout)
+        if receipt["sha256"] != hashlib.sha256(data).hexdigest():
+            raise ValueError("digest mismatch")
+        label = receipt["session"]
+    except (ValueError, KeyError, TypeError):
+        raise ClipboardError("Missing or invalid verification receipt from host") from None
+    print(f"Clipboard copied to {options.host} ({label}); contents verified.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ClipboardError, OSError) as error:
+        print(f"ssh-clipboard: {error}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)

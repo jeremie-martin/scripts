@@ -1,0 +1,23 @@
+[project]
+name = "scripts-concat"
+version = "0.1.0"
+description = "Concatenate text files with exclusions, configuration, and clipboard output."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["scripts-clipboard>=0.1.0","pathspec>=0.12.1","rich>=13.7.1"]
+
+[project.scripts]
+concat = "scripts_concat:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_concat"]
+
+[tool.uv.sources]
+scripts-clipboard = { path = "../../packages/clipboard", editable = true }

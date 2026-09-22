@@ -1,0 +1,23 @@
+[project]
+name = "scripts-clipmedia"
+version = "0.1.0"
+description = "Copy files to the desktop clipboard with MIME detection."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["scripts-clipboard>=0.1.0","typer>=0.12.3"]
+
+[project.scripts]
+clipmedia = "scripts_clipmedia:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_clipmedia"]
+
+[tool.uv.sources]
+scripts-clipboard = { path = "../../packages/clipboard", editable = true }

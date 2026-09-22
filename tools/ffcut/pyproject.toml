@@ -1,0 +1,20 @@
+[project]
+name = "scripts-ffcut"
+version = "0.1.0"
+description = "Cut and encode local media or YouTube videos with ffmpeg."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["yt-dlp>=2025.8.27"]
+
+[project.scripts]
+ffcut = "scripts_ffcut:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_ffcut"]

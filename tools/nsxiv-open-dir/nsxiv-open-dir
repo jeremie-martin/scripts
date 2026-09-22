@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+nsxiv_bin=${NSXIV_BIN:-/usr/local/bin/nsxiv}
+target=${1:-}
+
+if [[ -z "$target" ]]; then
+	exec "$nsxiv_bin"
+fi
+
+if [[ -d "$target" ]]; then
+	exec "$nsxiv_bin" -a -r "$target"
+fi
+
+dir=$(cd -- "$(dirname -- "$target")" && pwd -P) || exec "$nsxiv_bin" -a "$target"
+target_path="$dir/$(basename -- "$target")"
+
+mapfile -d '' files < <(
+	find "$dir" -maxdepth 1 \( -type f -o -type l \) \
+		\( \
+			-iname '*.avif' -o \
+			-iname '*.bmp' -o \
+			-iname '*.gif' -o \
+			-iname '*.heic' -o \
+			-iname '*.heif' -o \
+			-iname '*.ico' -o \
+			-iname '*.j2k' -o \
+			-iname '*.jp2' -o \
+			-iname '*.jpeg' -o \
+			-iname '*.jpg' -o \
+			-iname '*.jxl' -o \
+			-iname '*.png' -o \
+			-iname '*.pnm' -o \
+			-iname '*.qoi' -o \
+			-iname '*.tga' -o \
+			-iname '*.tif' -o \
+			-iname '*.tiff' -o \
+			-iname '*.webp' -o \
+			-iname '*.xbm' -o \
+			-iname '*.xpm' \
+		\) -print0 | sort -z
+)
+
+idx=1
+found=0
+for i in "${!files[@]}"; do
+	if [[ "${files[$i]}" == "$target_path" ]]; then
+		idx=$((i + 1))
+		found=1
+		break
+	fi
+done
+
+if (( ! found )); then
+	files=("$target_path" "${files[@]}")
+	idx=1
+fi
+
+exec "$nsxiv_bin" -a -i -0 -n "$idx" < <(printf '%s\0' "${files[@]}")

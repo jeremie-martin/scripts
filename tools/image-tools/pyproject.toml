@@ -1,0 +1,23 @@
+[project]
+name = "scripts-image-tools"
+version = "0.1.0"
+description = "Resize images for twi and working directories with ImageMagick."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["typer>=0.12.3"]
+
+[project.scripts]
+"2twi" = "scripts_image_tools:cmd_2twi"
+"2work" = "scripts_image_tools:cmd_2work"
+img-twi = "scripts_image_tools:cmd_2twi"
+img-work = "scripts_image_tools:cmd_2work"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_image_tools"]

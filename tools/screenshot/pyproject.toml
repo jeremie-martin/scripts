@@ -1,0 +1,26 @@
+[project]
+name = "scripts-screenshot"
+version = "0.1.0"
+description = "Capture the desktop, a monitor, or an interactive selection."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["scripts-clipboard>=0.1.0","typer>=0.12.3","mss>=9.0.1","pyautogui>=0.9.54","Pillow>=10.0.0"]
+
+[project.scripts]
+screenshot = "scripts_screenshot:main"
+
+[project.optional-dependencies]
+ocr = ["torch>=2.10.0", "transformers>=5.2.0"]
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_screenshot"]
+
+[tool.uv.sources]
+scripts-clipboard = { path = "../../packages/clipboard", editable = true }

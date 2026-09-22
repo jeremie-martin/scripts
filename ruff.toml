@@ -1,0 +1,9 @@
+target-version = "py312"
+line-length = 140
+extend-include = ["tools/ssh-clipboard/ssh-clipboard"]
+
+[per-file-target-version]
+"tools/ssh-clipboard/ssh-clipboard" = "py38"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]

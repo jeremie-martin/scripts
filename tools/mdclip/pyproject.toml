@@ -1,0 +1,23 @@
+[project]
+name = "scripts-mdclip"
+version = "0.1.0"
+description = "Render Markdown and copy styled HTML to the clipboard."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["scripts-clipboard>=0.1.0","typer>=0.12.3","pyperclip>=1.9.0","markdown-it-py>=3.0.0","beautifulsoup4>=4.12.0"]
+
+[project.scripts]
+mdclip = "scripts_mdclip:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.0"]
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["scripts_mdclip"]
+
+[tool.uv.sources]
+scripts-clipboard = { path = "../../packages/clipboard", editable = true }
