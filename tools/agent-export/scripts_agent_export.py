@@ -9,11 +9,18 @@ into the same stream of visible user/agent messages.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
+import shutil
+import subprocess
+import sys
+import unicodedata
 import warnings
 from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime
 from enum import StrEnum
 from itertools import islice
 from pathlib import Path
@@ -44,6 +51,26 @@ class Message:
     timestamp: str | None = field(default=None, compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ToolUse:
+    """One tool invocation, reduced to what a per-turn activity line needs."""
+
+    kind: Literal["command", "edit", "web", "agent", "other"]
+    name: str
+    files: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ModelChange:
+    """The model and reasoning effort in effect from this point of the log."""
+
+    model: str
+    effort: str | None = None
+
+
+Entry = Message | ToolUse | ModelChange
+
+
 class SessionError(ValueError):
     """A user-facing problem with a session source or its format."""
 
@@ -72,14 +99,28 @@ INTERNAL_PREFIXES = (
 )
 
 
+def _rewrite_key(line: str) -> tuple[str, str] | None:
+    """Identify a Codex record by ordinal and item ID, even when the line is truncated."""
+
+    ordinal = re.search(r'"ordinal":(\d+)', line)
+    item = re.search(r'"payload":\{[^{}]*?"id":"([^"]+)"', line)
+    return (ordinal[1], item[1]) if ordinal and item else None
+
+
 def _records(path: Path) -> Iterator[Record]:
-    """Yield valid JSON objects from a JSONL file, ignoring broken lines."""
+    """Yield valid JSON objects from a JSONL file, ignoring broken lines.
+
+    Codex sometimes leaves a partial write behind and then writes the same record
+    in full. Such a fragment loses nothing, so it is skipped without a warning.
+    """
 
     try:
         handle = path.open(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise SessionError(f"Could not read session file {path}: {exc}") from exc
 
+    fragments: dict[tuple[str, str], str] = {}
+    complete: set[tuple[str, str]] = set()
     with handle:
         for number, line in enumerate(handle, 1):
             if not line.strip():
@@ -87,13 +128,24 @@ def _records(path: Path) -> Iterator[Record]:
             try:
                 record = json.loads(line)
             except json.JSONDecodeError:
-                warnings.warn(f"{path}:{number}: invalid JSON record skipped", ExportWarning, stacklevel=2)
+                message = f"{path}:{number}: invalid JSON record skipped"
+                key = _rewrite_key(line)
+                if key is None:
+                    warnings.warn(message, ExportWarning, stacklevel=2)
+                elif key not in complete:
+                    fragments[key] = message
                 continue
             if isinstance(record, dict):
+                if "ordinal" in record:
+                    key = (str(record["ordinal"]), str(_mapping(record.get("payload")).get("id")))
+                    complete.add(key)
+                    fragments.pop(key, None)
                 record["_line"] = number
                 yield record
             else:
                 warnings.warn(f"{path}:{number}: non-object record skipped", ExportWarning, stacklevel=2)
+    for message in fragments.values():
+        warnings.warn(message, ExportWarning, stacklevel=2)
 
 
 def _mapping(value: object) -> Record:
@@ -266,7 +318,88 @@ def _dialogue_result(name: str, arguments: Record, result: object) -> Message | 
     return Message("NOTICE", f"{name} result:\n{text}")
 
 
-def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iterator[Message]:
+COMMAND_TOOLS = {"Bash", "PowerShell", "exec_command", "shell", "local_shell_call"}
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"}
+WEB_TOOLS = {"WebFetch", "WebSearch", "web__run", "web_search", "web_search_call"}
+AGENT_TOOLS = {"Agent", "Task", "spawn_agent"}
+# Reading, waiting, and bookkeeping calls say little about what a turn did.
+QUIET_TOOLS = {
+    "Read",
+    "Glob",
+    "Grep",
+    "LS",
+    "TodoWrite",
+    "ToolSearch",
+    "TaskOutput",
+    "TaskStop",
+    "Monitor",
+    "SendMessage",
+    "ScheduleWakeup",
+    "view_image",
+    "write_stdin",
+    "wait",
+    "sleep",
+    "clock__curr_time",
+    "update_plan",
+    "get_goal",
+    "update_goal",
+    "list_agents",
+    "send_message",
+    "followup_task",
+    "wait_agent",
+    "multi_agent_v1__send_input",
+    "multi_agent_v1__wait_agent",
+    "exec",
+    "combinations",
+    "permutations",
+}
+
+
+def _patch_files(text: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(re.findall(r"\*\*\* (?:Add|Update|Delete) File: ([^\n\"\\]+)", text)))
+
+
+def _tool_use(name: str, files: tuple[str, ...] = ()) -> ToolUse | None:
+    if name in QUIET_TOOLS or name in DIALOGUE_TOOLS:
+        return None
+    if name in COMMAND_TOOLS:
+        return ToolUse("command", name)
+    if name in EDIT_TOOLS:
+        return ToolUse("edit", name, files)
+    if name in WEB_TOOLS:
+        return ToolUse("web", name)
+    if name in AGENT_TOOLS:
+        return ToolUse("agent", name)
+    return ToolUse("other", name)
+
+
+def _claude_tool_use(block: Record) -> ToolUse | None:
+    arguments = _mapping(block.get("input"))
+    path = arguments.get("file_path") or arguments.get("notebook_path")
+    return _tool_use(str(block.get("name", "")), (path,) if isinstance(path, str) else ())
+
+
+def _codex_tool_uses(payload: Record) -> Iterator[ToolUse]:
+    kind = payload.get("type")
+    if kind == "local_shell_call":
+        yield ToolUse("command", "local_shell_call")
+    elif kind == "web_search_call":
+        yield ToolUse("web", "web_search_call")
+    elif kind in {"function_call", "custom_tool_call"}:
+        name = str(payload.get("name", "")).split(".")[-1]
+        code = str(payload.get("input") or payload.get("arguments") or "")
+        # Codex's exec tool runs a script that may call several tools.
+        names = re.findall(r"\btools\.(\w+)\s*\(", code) if name == "exec" else [name]
+        files = _patch_files(code)
+        for called in names:
+            use = _tool_use(called, files if called == "apply_patch" else ())
+            if use:
+                if use.files:
+                    files = ()  # One exec's patches are reported once.
+                yield use
+
+
+def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iterator[Entry]:
     kind = record.get("type")
     if kind == "system" and record.get("subtype") == "away_summary":
         yield Message("SUMMARY", str(record.get("content", "")))
@@ -281,6 +414,10 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
     human = _mapping(record.get("origin")).get("kind") == "human"
     if record.get("isMeta") and not human:
         return
+    model = _mapping(record.get("message")).get("model")
+    if kind == "assistant" and isinstance(model, str) and model != "<synthetic>":
+        effort = record.get("effort")
+        yield ModelChange(model, effort if isinstance(effort, str) else None)
     if kind == "user" and _mapping(record.get("origin")).get("kind") == "task-notification":
         return
     if isinstance(content, str) and content.lstrip().startswith("<command-name>"):
@@ -308,6 +445,8 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
             if name in DIALOGUE_TOOLS:
                 calls[str(block.get("id"))] = (name, args)
                 yield _dialogue_call(name, args)
+            elif use := _claude_tool_use(block):
+                yield use
         elif isinstance(block, dict) and block.get("type") == "tool_result":
             call = calls.get(str(block.get("tool_use_id")))
             result = record.get("toolUseResult")
@@ -328,7 +467,7 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
                 yield visible
 
 
-def _claude_messages(path: Path, seen: set[str] | None = None) -> Iterator[Message]:
+def _claude_entries(path: Path, seen: set[str] | None = None) -> Iterator[Entry]:
     calls: dict[str, tuple[str, Record]] = {}
     seen = seen if seen is not None else set()
     for record in _records(path):
@@ -339,8 +478,8 @@ def _claude_messages(path: Path, seen: set[str] | None = None) -> Iterator[Messa
         # Even copied calls must populate the result lookup for this session.
         messages = list(_claude_record(record, calls))
         if not duplicate:
-            for message in messages:
-                yield _located(message, record, path)
+            for entry in messages:
+                yield _located(entry, record, path) if isinstance(entry, Message) else entry
 
 
 def _codex_message(payload: Record) -> Message | None:
@@ -421,7 +560,7 @@ def _contains_executable_question(code: str) -> bool:
     return bool(re.search(r"(?:tools|functions)\.request_user_input(?:_async)?\s*\(", code))
 
 
-def _codex_messages(path: Path) -> Iterator[Message]:
+def _codex_entries(path: Path) -> Iterator[Entry]:
     # Event and response messages are two representations of the same exchange.
     # Match occurrence counts, not a text set: repeated real messages must survive.
     counts: list[Counter[tuple[str, str, str]]] = [Counter() for _ in range(4)]
@@ -436,6 +575,11 @@ def _codex_messages(path: Path) -> Iterator[Message]:
     for scope, record in _codex_records(path):
         payload = _mapping(record.get("payload"))
         kind = payload.get("type")
+        if record.get("type") == "turn_context" and isinstance(payload.get("model"), str):
+            effort = payload.get("effort")
+            yield ModelChange(payload["model"], effort if isinstance(effort, str) else None)
+        elif record.get("type") == "response_item":
+            yield from _codex_tool_uses(payload)
         visible = None
         representation = _codex_representation(record)
         if representation:
@@ -627,14 +771,20 @@ def resolve_session(source: str, roots: Sequence[Path] = DEFAULT_SESSION_ROOTS) 
     return matches[0]
 
 
-def messages_from(path: Path, session_format: SessionFormat | None = None) -> Iterator[Message]:
-    """Yield visible messages from *path* in source order."""
+def entries_from(path: Path, session_format: SessionFormat | None = None) -> Iterator[Entry]:
+    """Yield visible messages, tool uses, and model changes from *path* in source order."""
 
     session_format = session_format or detect_session_format(path)
     if session_format is SessionFormat.CLAUDE:
-        yield from _claude_messages(path)
+        yield from _claude_entries(path)
     else:
-        yield from _codex_messages(path)
+        yield from _codex_entries(path)
+
+
+def messages_from(path: Path, session_format: SessionFormat | None = None) -> Iterator[Message]:
+    """Yield visible messages from *path* in source order."""
+
+    return (entry for entry in entries_from(path, session_format) if isinstance(entry, Message))
 
 
 def continuation_paths(path: Path) -> list[Path]:
@@ -692,66 +842,521 @@ def continuation_paths(path: Path) -> list[Path]:
     return paths
 
 
-def conversation_from(path: Path, *, single_session: bool = False) -> Iterator[Message]:
-    session_format = detect_session_format(path)
+def conversation_entries(path: Path, *, single_session: bool = False, session_format: SessionFormat | None = None) -> Iterator[Entry]:
+    """Yield the entries of a session, joined with its explicit Claude continuations."""
+
+    session_format = session_format or detect_session_format(path)
     paths = continuation_paths(path) if session_format is SessionFormat.CLAUDE and not single_session else [path]
     seen: set[str] = set()
     for source in paths:
         if len(paths) > 1:
             yield Message("NOTICE", f"Session {source.stem}", source=str(source))
         if session_format is SessionFormat.CLAUDE:
-            yield from _claude_messages(source, seen)
+            yield from _claude_entries(source, seen)
         else:
-            yield from _codex_messages(source)
+            yield from _codex_entries(source)
 
 
-def render(messages: Iterable[Message], output_format: str = "text") -> str:
-    """Render normalized messages in the command's stable plain-text format."""
+def conversation_from(path: Path, *, single_session: bool = False) -> Iterator[Message]:
+    return (entry for entry in conversation_entries(path, single_session=single_session) if isinstance(entry, Message))
 
+
+# Session metadata ---------------------------------------------------------
+
+AGENT_NAMES = {SessionFormat.CLAUDE: "Claude Code", SessionFormat.CODEX: "Codex"}
+UUID_SUFFIX = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
+
+
+@dataclass(slots=True)
+class SessionInfo:
+    """What identifies a session to a person: where, when, and what it was about."""
+
+    path: Path
+    format: SessionFormat
+    id: str
+    title: str | None = None
+    cwd: str | None = None
+    branch: str | None = None
+    started: datetime | None = None
+    updated: datetime | None = None
+    first_prompt: str | None = None
+    interactive: bool = True
+
+
+def _json_object(line: str) -> Record:
+    try:
+        record = json.loads(line)
+    except ValueError:
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value).astimezone()
+    except ValueError:
+        return None
+
+
+def _one_line(text: str, limit: int = 80) -> str | None:
+    for line in text.splitlines():
+        line = " ".join(line.split())
+        if line:
+            return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+    return None
+
+
+def _prompt_line(text: str) -> str | None:
+    """A prompt as a one-line label; slash commands read as they were typed."""
+
+    command = re.search(r"<command-name>(.*?)</command-name>", text, re.S)
+    if command:
+        args = re.search(r"<command-args>(.*?)</command-args>", text, re.S)
+        text = command[1].strip() + (" " + args[1].strip() if args and args[1].strip() else "")
+    return _one_line(text)
+
+
+def _claude_info(path: Path) -> SessionInfo:
+    info = SessionInfo(path, SessionFormat.CLAUDE, path.stem, interactive="subagents" not in path.parts)
+    titles: dict[str, str] = {}
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                # Tool results can make lines huge; parse only the few that matter.
+                if not (
+                    '"ai-title"' in line
+                    or '"custom-title"' in line
+                    or (info.cwd is None and '"cwd"' in line)
+                    or (info.first_prompt is None and '"human"' in line)
+                ):
+                    continue
+                record = _json_object(line)
+                for kind, key in (("custom-title", "customTitle"), ("ai-title", "aiTitle")):
+                    if record.get("type") == kind and isinstance(record.get(key), str) and record[key].strip():
+                        titles[kind] = record[key].strip()
+                if info.cwd is None and isinstance(record.get("cwd"), str):
+                    info.cwd = record["cwd"]
+                    info.branch = record.get("gitBranch") or None
+                    info.started = _time(record.get("timestamp"))
+                if info.first_prompt is None and record.get("type") == "user" and _mapping(record.get("origin")).get("kind") == "human":
+                    info.first_prompt = _prompt_line("\n".join(_text_parts(_mapping(record.get("message")).get("content"), "text")))
+    except OSError:
+        pass
+    info.title = titles.get("custom-title") or titles.get("ai-title")
+    return info
+
+
+_codex_title_cache: dict[Path, dict[str, str]] = {}
+
+
+def _codex_title(path: Path, session_id: str) -> str | None:
+    """Codex keeps short thread names in session_index.jsonl beside its sessions directory."""
+
+    for parent in [*path.parents, Path.home() / ".codex"]:
+        index = parent / "session_index.jsonl"
+        if index.is_file():
+            break
+    else:
+        return None
+    if index not in _codex_title_cache:
+        titles: dict[str, str] = {}
+        try:
+            for line in index.read_text(encoding="utf-8", errors="replace").splitlines():
+                record = _json_object(line)
+                name = record.get("thread_name")
+                if isinstance(record.get("id"), str) and isinstance(name, str) and name.strip():
+                    titles[record["id"]] = name.strip()
+        except OSError:
+            pass
+        _codex_title_cache[index] = titles
+    return _codex_title_cache[index].get(session_id)
+
+
+def _codex_info(path: Path) -> SessionInfo:
+    match = UUID_SUFFIX.search(path.stem)
+    info = SessionInfo(path, SessionFormat.CODEX, match[1] if match else path.stem)
+    meta: Record = {}
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            first = _json_object(handle.readline())
+            if first.get("type") == "session_meta":
+                meta = _mapping(first.get("payload"))
+            # The first prompt is near the top; do not read multi-megabyte rollouts to find it.
+            for line in islice(handle, 400):
+                if '"user' in line or '"UserMessage"' in line:
+                    representation = _codex_representation(_json_object(line))
+                    if representation and representation[1].role == "USER":
+                        info.first_prompt = _one_line(representation[1].text)
+                        if info.first_prompt:
+                            break
+    except OSError:
+        pass
+    session_id = meta.get("id") or meta.get("session_id")
+    if isinstance(session_id, str):
+        info.id = session_id
+    info.cwd = meta.get("cwd") if isinstance(meta.get("cwd"), str) else None
+    info.branch = _mapping(meta.get("git")).get("branch") or None
+    info.started = _time(meta.get("timestamp"))
+    source = meta.get("source")
+    info.interactive = source is None or (isinstance(source, str) and source != "exec" and meta.get("thread_source") != "subagent")
+    info.title = _codex_title(path, info.id)
+    return info
+
+
+def session_info(path: Path, session_format: SessionFormat | None = None) -> SessionInfo:
+    """Describe a session without exporting it."""
+
+    session_format = session_format or detect_session_format(path)
+    return _claude_info(path) if session_format is SessionFormat.CLAUDE else _codex_info(path)
+
+
+def session_title(info: SessionInfo, messages: Iterable[Message] = ()) -> str:
+    if info.title or info.first_prompt:
+        return info.title or info.first_prompt or ""
+    first = next((message for message in messages if message.role == "USER"), None)
+    return (_one_line(first.text) if first else None) or f"Session {info.id}"
+
+
+# Rendering ----------------------------------------------------------------
+
+
+def _home(path: str) -> str:
+    home = str(Path.home())
+    return "~" + path[len(home) :] if path == home or path.startswith(home + os.sep) else path
+
+
+def _within(path: str | None, directory: str) -> bool:
+    return path is not None and (path == directory or path.startswith(directory.rstrip(os.sep) + os.sep))
+
+
+def _relative(path: str, cwd: str | None) -> str:
+    if cwd and os.path.isabs(path) and _within(path, cwd):
+        return os.path.relpath(path, cwd)
+    return _home(path)
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}" + ("" if count == 1 else "s")
+
+
+def _describe_model(model: ModelChange) -> str:
+    return f"{model.model} ({model.effort} effort)" if model.effort else model.model
+
+
+def activity_line(tools: Sequence[ToolUse], cwd: str | None = None, code: str = "") -> str | None:
+    """Summarize one turn's tool use in a line; *code* wraps file names (e.g. a backtick)."""
+
+    counts = Counter(tool.kind for tool in tools)
+    files = list(dict.fromkeys(_relative(name, cwd) for tool in tools for name in tool.files))
+    parts = []
+    if counts["command"]:
+        parts.append(_plural(counts["command"], "command"))
+    if files:
+        shown = ", ".join(f"{code}{name}{code}" for name in files[:6])
+        parts.append(f"edited {shown}" + (f" and {len(files) - 6} more" if len(files) > 6 else ""))
+    elif counts["edit"]:
+        parts.append(_plural(counts["edit"], "edit"))
+    if counts["web"]:
+        parts.append(_plural(counts["web"], "web lookup"))
+    if counts["agent"]:
+        parts.append(_plural(counts["agent"], "subagent"))
+    others = Counter(tool.name for tool in tools if tool.kind == "other")
+    parts += [f"{name} ({count} calls)" if count > 1 else name for name, count in others.most_common(3)]
+    if len(others) > 3:
+        parts.append(_plural(len(others) - 3, "other tool"))
+    return "Tool activity: " + "; ".join(parts) + "." if parts else None
+
+
+def _blocks(entries: Iterable[Entry], cwd: str | None, activity: bool, code: str) -> Iterator[tuple[str, str]]:
+    """Yield (kind, text) pairs: kind is a message role, "MODEL", or "ACTIVITY"."""
+
+    tools: list[ToolUse] = []
+    current: ModelChange | None = None
+
+    def pending() -> Iterator[tuple[str, str]]:
+        line = activity_line(tools, cwd, code) if activity else None
+        tools.clear()
+        if line:
+            yield "ACTIVITY", line
+
+    for entry in entries:
+        if isinstance(entry, ToolUse):
+            tools.append(entry)
+        elif isinstance(entry, ModelChange):
+            if entry.effort is None and current:
+                entry = replace(entry, effort=current.effort)
+            if current and entry != current:
+                yield from pending()
+                yield "MODEL", f"Switched to {_describe_model(entry)}."
+            current = entry
+        else:
+            if entry.role != "AGENT":
+                yield from pending()
+            yield entry.role, entry.text
+    yield from pending()
+
+
+def _models(entries: Iterable[Entry]) -> list[ModelChange]:
+    models: list[ModelChange] = []
+    for entry in entries:
+        if isinstance(entry, ModelChange):
+            if entry.effort is None and models:
+                entry = replace(entry, effort=models[-1].effort)
+            if entry not in models:
+                models.append(entry)
+    return models
+
+
+def _span(entries: Sequence[Entry], info: SessionInfo) -> str | None:
+    times = [time for entry in entries if isinstance(entry, Message) and (time := _time(entry.timestamp))]
+    start, end = min(times, default=info.started), max(times, default=None)
+    if start is None:
+        return None
+    text = start.strftime("%Y-%m-%d %H:%M")
+    if end and end.strftime("%Y-%m-%d %H:%M") != text:
+        text += end.strftime(" to %H:%M") if end.date() == start.date() else end.strftime(" → %Y-%m-%d %H:%M")
+    return text
+
+
+def _header(info: SessionInfo, entries: Sequence[Entry], markdown: bool, activity: bool) -> list[str]:
+    code = "`" if markdown else ""
+    facts = []
+    if info.cwd:
+        facts.append(("Project", f"{code}{_home(info.cwd)}{code}" + (f" (branch {code}{info.branch}{code})" if info.branch else "")))
+    if span := _span(entries, info):
+        facts.append(("Date", span))
+    if models := _models(entries):
+        facts.append(("Models" if len(models) > 1 else "Model", ", then ".join(map(_describe_model, models))))
+    facts.append(("Session", f"{AGENT_NAMES[info.format]} {code}{info.id}{code}"))
+    facts.append(("Log", f"{code}{_home(str(info.path))}{code}"))
+    note = "Visible conversation only: reasoning, tool calls and their output, and injected context are omitted."
+    if activity:
+        note += " Each agent turn ends with a one-line summary of its tool activity."
+    title = session_title(info, (entry for entry in entries if isinstance(entry, Message)))
+    if markdown:
+        return [f"# {title}", "\n".join(f"- **{label}:** {value}" for label, value in facts), f"*{note}*", "---"]
+    return [title, "\n".join(f"{label}: {value}" for label, value in facts), note]
+
+
+def _quote(text: str) -> str:
+    return "\n".join(f"> {line}" if line else ">" for line in text.splitlines())
+
+
+def render(entries: Iterable[Entry], output_format: str = "markdown", *, info: SessionInfo | None = None, activity: bool = True) -> str:
+    """Render a conversation as markdown or plain text (merged turns), or JSON (one object per message)."""
+
+    entries = list(entries)
     if output_format == "json":
-        return json.dumps([asdict(message) for message in messages], ensure_ascii=False, indent=2)
-    if output_format == "markdown":
-        return "\n\n".join(f"## {message.role}\n\n{message.text}" for message in messages)
-    return "\n\n".join(f"{message.role}:\n{message.text}" for message in messages)
+        return json.dumps([asdict(entry) for entry in entries if isinstance(entry, Message)], ensure_ascii=False, indent=2)
+    markdown = output_format == "markdown"
+    parts = _header(info, entries, markdown, activity) if info else []
+    speaker = None
+    for kind, text in _blocks(entries, info.cwd if info else None, activity, "`" if markdown else ""):
+        if kind in {"NOTICE", "MODEL"}:
+            parts.append(_quote(text) if markdown else f"[{text}]")
+        elif kind == "ACTIVITY":
+            parts.append(f"*{text}*" if markdown else f"[{text}]")
+        else:
+            # Consecutive messages from one speaker form a single section.
+            if kind == speaker:
+                parts.append(text)
+            elif markdown:
+                parts += [f"## {kind.title()}", text]
+            else:
+                parts.append(f"{kind}:\n{text}")
+            speaker = kind
+    return "\n\n".join(parts)
 
 
-app = typer.Typer(add_completion=False, help="Export the visible conversation from a Claude or Codex JSONL session.")
+# Choosing a session -------------------------------------------------------
+
+RECENT_LIMIT = 300
+
+
+def recent_sessions(roots: Sequence[Path] = DEFAULT_SESSION_ROOTS, limit: int = RECENT_LIMIT) -> list[SessionInfo]:
+    """Interactive sessions with at least one prompt, most recently active first."""
+
+    found: list[tuple[float, Path, SessionFormat]] = []
+    for root in roots:
+        root = root.expanduser()
+        candidates = [(path, SessionFormat.CLAUDE) for path in (root / "projects").glob("*/*.jsonl")]
+        if (root / "sessions").is_dir():
+            candidates += [(path, SessionFormat.CODEX) for path in (root / "sessions").rglob("*.jsonl")]
+        for path, session_format in candidates:
+            try:
+                found.append((path.stat().st_mtime, path, session_format))
+            except OSError:
+                continue
+    found.sort(key=lambda item: item[0], reverse=True)
+    sessions = []
+    for mtime, path, session_format in found[:limit]:
+        info = _claude_info(path) if session_format is SessionFormat.CLAUDE else _codex_info(path)
+        if info.interactive and info.first_prompt:
+            info.updated = datetime.fromtimestamp(mtime).astimezone()
+            sessions.append(info)
+    return sessions
+
+
+def _picker_row(info: SessionInfo, here: str) -> str:
+    when = info.updated.strftime("%b %d %H:%M") if info.updated else ""
+    agent = "claude" if info.format is SessionFormat.CLAUDE else "codex"
+    folder = "." if info.cwd == here else _home(info.cwd or "?")
+    folder = folder if len(folder) <= 28 else "…" + folder[-27:]
+    title = " ".join((info.title or info.first_prompt or info.id).split())
+    return f"{info.path}\t{when:<12}  {agent:<6}  {folder:<28}  {title}"
+
+
+def pick_session(roots: Sequence[Path] = DEFAULT_SESSION_ROOTS) -> Path:
+    """Let the user choose a recent session with fzf; sessions from this directory come first."""
+
+    fzf = shutil.which("fzf")
+    if not fzf:
+        raise SessionError("Pass a session ID or JSONL path, or install fzf to choose from recent sessions.")
+    here = os.getcwd()
+    sessions = sorted(recent_sessions(roots), key=lambda info: not _within(info.cwd, here))
+    if not sessions:
+        raise SessionError("No recent sessions found.")
+    preview = f"{shlex.quote(sys.executable)} -m scripts_agent_export {{1}} -o - 2>/dev/null"
+    if shutil.which("bat"):
+        preview += " | bat --language=markdown --color=always --style=plain --paging=never"
+    result = subprocess.run(
+        [
+            fzf,
+            "--delimiter=\t",
+            "--with-nth=2..",
+            "--tiebreak=index",
+            "--layout=reverse",
+            "--prompt=session> ",
+            "--header=Enter exports · Esc cancels",
+            "--preview",
+            preview,
+            "--preview-window=right,55%,wrap",
+        ],
+        input="".join(_picker_row(info, here) + "\n" for info in sessions),
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise typer.Exit(130 if result.returncode == 130 else 1)
+    return Path(result.stdout.split("\t", 1)[0].strip())
+
+
+# Command line -------------------------------------------------------------
+
+FORMAT_SUFFIXES = {"markdown": ".md", "text": ".txt", "json": ".json"}
+SUFFIX_FORMATS = {".md": "markdown", ".markdown": "markdown", ".txt": "text", ".json": "json"}
+
+
+def _slug(text: str, limit: int = 60) -> str:
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")
+    return slug if len(slug) <= limit else slug[:limit].rsplit("-", 1)[0]
+
+
+def default_filename(info: SessionInfo, title: str, suffix: str = ".md") -> str:
+    """DATE-TITLE.md, dated by when the session started."""
+
+    date = (info.started or info.updated or datetime.now().astimezone()).strftime("%Y-%m-%d")
+    return f"{date}-{_slug(title) or info.id[:8]}{suffix}"
+
+
+def _unclaimed(path: Path, session_id: str) -> Path:
+    """Re-exporting a session replaces its file; a different session gets its own name."""
+
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            existing = handle.read(4096)
+    except FileNotFoundError:
+        return path
+    except OSError:
+        existing = ""
+    return path if session_id in existing else path.with_stem(f"{path.stem}-{session_id[:8]}")
+
+
+def _stdout_is_terminal() -> bool:
+    return sys.stdout.isatty()
+
+
+def _shown(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return _home(str(path))
+
+
+app = typer.Typer(add_completion=False, help="Export the visible conversation from a Claude or Codex session.")
 
 
 @app.command()
 def export(
-    source: str = typer.Argument(..., help="Session ID or path to a JSONL session file."),
-    single_session: bool = typer.Option(False, help="Export only this file, without joining explicit Claude continuations."),
-    output_format: str = typer.Option("text", "--format", help="Output format: text, markdown, or json (includes source locations)."),
-    output_path: Annotated[
-        Path | None, typer.Option("--output", "-o", help="Save to a file instead of stdout. Existing files are replaced.")
+    source: Annotated[
+        str | None, typer.Argument(help="Session ID or JSONL path. Omit it to choose a recent session with fzf.", show_default=False)
     ] = None,
-    strict: bool = typer.Option(False, help="Fail without producing an export if completeness warnings occur."),
+    output: Annotated[
+        str | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="File or directory to write, or '-' for stdout. Default: DATE-TITLE.md here, or stdout when piped.",
+            show_default=False,
+        ),
+    ] = None,
+    output_format: Annotated[
+        str | None,
+        typer.Option(
+            "--format", help="markdown, text, or json (per-message, with source locations). Default: from -o's extension, else markdown."
+        ),
+    ] = None,
+    activity: Annotated[bool, typer.Option(help="End each agent turn with a one-line summary of its tool use.")] = True,
+    single_session: Annotated[bool, typer.Option(help="Export only this file, without joining explicit Claude continuations.")] = False,
+    strict: Annotated[bool, typer.Option(help="Fail without producing an export if completeness warnings occur.")] = False,
 ) -> None:
-    """Export prompts, replies, questions, answers, plans, summaries, and attachment references."""
-    if output_format not in {"text", "markdown", "json"}:
-        raise typer.BadParameter("Choose text, markdown, or json", param_hint="--format")
+    """Export a session's prompts, replies, questions, answers, plans, and summaries as a readable transcript."""
+    if output_format not in {None, *FORMAT_SUFFIXES}:
+        raise typer.BadParameter("Choose markdown, text, or json", param_hint="--format")
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ExportWarning)
-            path = resolve_session(source)
-            messages = list(conversation_from(path, single_session=single_session))
+            path = pick_session() if source is None else resolve_session(source.strip())
+            session_format = detect_session_format(path)
+            entries = list(conversation_entries(path, single_session=single_session, session_format=session_format))
+            info = session_info(path, session_format)
         diagnostics = list(dict.fromkeys(str(warning.message) for warning in caught))
         for diagnostic in diagnostics:
             typer.echo(f"Warning: {diagnostic}", err=True)
         if strict and diagnostics:
             raise SessionError("Export cancelled by --strict because completeness warnings occurred.")
-        output = render(messages, output_format)
+
+        messages = [entry for entry in entries if isinstance(entry, Message)]
+        info.title = session_title(info, messages)
+        explicit = Path(output).expanduser() if output and output != "-" else None
+        if explicit and not explicit.is_dir():
+            output_format = output_format or SUFFIX_FORMATS.get(explicit.suffix.lower())
+        output_format = output_format or "markdown"
+        if output == "-" or (output is None and not _stdout_is_terminal()):
+            destination = None
+        elif explicit and not explicit.is_dir():
+            destination = explicit
+        else:
+            name = default_filename(info, info.title, FORMAT_SUFFIXES[output_format])
+            destination = _unclaimed((explicit or Path.cwd()) / name, info.id)
+
+        text = render(entries, output_format, info=info, activity=activity)
         if not messages:
             typer.echo("No conversation messages found in this session.", err=True)
-        if output_path:
-            destination = output_path.expanduser().resolve()
-            if destination == path or destination.suffix == ".jsonl":
-                raise SessionError("Refusing to overwrite a session log; choose a .txt, .md, or .json output file.")
-            output_path.expanduser().write_text(output + "\n", encoding="utf-8")
-            typer.echo(f"Exported {len(messages)} entries to {output_path}", err=True)
-        elif output:
-            typer.echo(output)
+        if destination is None:
+            typer.echo(text)
+            return
+        resolved = destination.resolve()
+        if resolved == path or resolved.suffix == ".jsonl":
+            raise SessionError("Refusing to overwrite a session log; choose a .md, .txt, or .json output file.")
+        destination.write_text(text + "\n", encoding="utf-8")
+        tokens = len(text) // 4
+        size = f"{tokens / 1000:.0f}k" if tokens >= 1000 else str(tokens)
+        typer.echo(f"Saved {_shown(destination)} ({_plural(len(messages), 'message')}, ≈{size} tokens)", err=True)
     except (SessionError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc

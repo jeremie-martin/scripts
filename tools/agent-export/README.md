@@ -18,19 +18,48 @@ the root README. Shared-library consumers must include the clipboard wheel.
 ## Use
 
 ```sh
-agent-export SESSION_ID
-agent-export SESSION_ID --format markdown -o conversation.md
+agent-export SESSION_ID        # saves ./DATE-TITLE.md, e.g. 2026-09-22-review-prompt-add-improvements.md
+agent-export                   # choose a recent session with fzf (this directory's sessions first)
+agent-export SESSION_ID > x.md # piped or redirected output is markdown on stdout
 ```
 
-## Export behavior
+The session ID is the one Claude and Codex print when a session closes; a `.jsonl`
+path works too. In a terminal, the transcript is saved in the current directory under
+the session's start date and title, and the command reports its size in tokens.
+Re-exporting a session replaces its own file; a different session with the same
+title gets its ID appended instead of overwriting.
 
-`agent-export` accepts either a `.jsonl` path or a session ID. For an ID it searches
-`~/.claude` and `~/.codex` and detects the log format. The default is a faithful,
-chronological conversation, with all user and assistant prose retained. It
-includes slash-command prompts, questions and choices, submitted answers,
-proposed plans and approvals, readable summaries, and attachment references.
-It does not rank or summarize away progress updates. Operational tool calls,
-code-edit results, model reasoning, and injected setup context are omitted.
+```sh
+agent-export SESSION_ID -o notes/         # into a directory, with the default name
+agent-export SESSION_ID -o session.json   # format follows the extension (.md, .txt, .json)
+agent-export SESSION_ID -o -              # stdout, even in a terminal
+agent-export SESSION_ID --no-activity     # omit the per-turn tool activity lines
+agent-export SESSION_ID --single-session  # do not join Claude continuations
+agent-export SESSION_ID --strict          # refuse to export if anything may be missing
+```
+
+The picker needs `fzf`; its preview uses `bat` when available. It lists interactive
+sessions that have at least one prompt, hiding `codex exec` runs and subagents.
+
+## What a transcript contains
+
+The export is meant as context for another agent, so it keeps what was said and
+compresses what was done:
+
+- A header with the title, project directory and git branch, date range, every model
+  and reasoning effort used, the session ID, and the source log path.
+- The conversation in turns: one `## User` or `## Agent` section per speaker change,
+  including slash commands, questions and choices, submitted answers, proposed plans
+  and approvals, readable summaries, and attachment references.
+- One line at the end of each agent turn summarizing its tool use, such as
+  `Tool activity: 28 commands; edited src/server.py, README.md; 2 web lookups.`
+  This typically adds 1–3% to the transcript.
+- A quoted note where the model or effort changed, or where a turn was interrupted,
+  rolled back, or compacted.
+
+Model reasoning, tool calls and their output, and injected setup context are omitted.
+The `text` format has the same structure without markdown; `json` is one object per
+visible message with its source file, JSONL line, and timestamp.
 
 Explicit Claude continuation links are followed in both directions by default;
 copied records are deduplicated by message UUID. Codex's response, event, and
@@ -39,30 +68,15 @@ ordinary repeated replies survive. Codex forks are exported as the selected
 branch's recorded history; separate forks and subagents are not automatically
 merged. In-log rollbacks are marked, with the earlier exchanges retained.
 
-```bash
-agent-export 01a01dad-fd6f-7d53-9ac5-b07470d7150e
-agent-export ~/.claude/projects/example/session.jsonl
-agent-export SESSION_ID --format markdown -o conversation.md
-agent-export SESSION_ID --format json -o conversation.json
-agent-export SESSION_ID --single-session
-agent-export SESSION_ID --strict
-```
-
-Text is the default format. JSON adds the source file, JSONL line number, and
-timestamp for each entry. `SUMMARY` and `NOTICE` labels distinguish generated
-recaps and session events from things the user actually said. Output goes to
-stdout unless `-o` is supplied; an existing output file is replaced. Diagnostics
-go to stderr so redirected transcripts stay clean.
-
 Images, audio, and documents retain references or explicit embedded-attachment
 placeholders; their binary contents are not included. Some Codex compactions
 contain only encrypted summaries: the export marks that limitation and preserves
-the readable history. Unknown conversation blocks and malformed JSON lines
-produce warnings, as do missing linked Claude sessions. `--strict` refuses to
-produce an export when such warnings occur. Questions embedded inside executable
-tool scripts cannot currently be reconstructed; detected calls produce a warning.
-This is a readable transcript, not a lossless backup of every internal log event;
-keep the original JSONL files when archival completeness matters.
+the readable history. Unknown conversation blocks, malformed JSON lines, and missing
+linked Claude sessions produce warnings on stderr. A partial Codex write that is
+followed by the complete record loses nothing and is skipped silently. Questions
+embedded inside executable tool scripts cannot currently be reconstructed; detected
+calls produce a warning. This is a readable transcript, not a lossless backup; keep
+the original JSONL files when archival completeness matters.
 
 To audit format coverage against recent local logs without printing their text:
 

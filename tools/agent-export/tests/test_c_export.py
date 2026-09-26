@@ -2,19 +2,26 @@ import json
 from pathlib import Path
 
 import pytest
+import scripts_agent_export
 from scripts_agent_export import (
     ExportWarning,
     Message,
+    ModelChange,
     SessionError,
     SessionFormat,
+    ToolUse,
     app,
     continuation_paths,
     conversation_from,
     detect_session_format,
+    entries_from,
     messages_from,
+    recent_sessions,
     render,
     resolve_session,
+    session_info,
 )
+from typer.testing import CliRunner
 
 
 def write_jsonl(path: Path, records: list[dict[str, object]]) -> Path:
@@ -96,7 +103,7 @@ def test_codex_export_ignores_setup_reasoning_and_tools(tmp_path: Path) -> None:
     )
 
     assert detect_session_format(path) is SessionFormat.CODEX
-    assert render(messages_from(path)) == "USER:\nHello Codex\n\nAGENT:\nVisible reply\n\n[output_image: private]"
+    assert render(messages_from(path), "text") == "USER:\nHello Codex\n\nAGENT:\nVisible reply\n\n[output_image: private]"
 
 
 def test_resolve_session_matches_filename_and_reports_ambiguity(tmp_path: Path) -> None:
@@ -401,7 +408,7 @@ def test_source_locations_and_formats(tmp_path: Path) -> None:
             "timestamp": "2026-09-10T10:00:00Z",
         }
     ]
-    assert render(messages, "markdown") == "## USER\n\nHello"
+    assert render(messages, "markdown") == "## User\n\nHello"
 
 
 def test_cli_warns_for_corrupt_logs_and_strict_prevents_output(tmp_path: Path) -> None:
@@ -427,9 +434,12 @@ def test_cli_output_and_invalid_format(tmp_path: Path) -> None:
     path = write_jsonl(tmp_path / "session.jsonl", [claude("user", "Hello")])
     output = tmp_path / "output.md"
     runner = CliRunner()
-    result = runner.invoke(app, [str(path), "--format", "markdown", "-o", str(output)])
+    result = runner.invoke(app, [str(path), "-o", str(output)])
     assert result.exit_code == 0
-    assert output.read_text() == "## USER\n\nHello\n"
+    text = output.read_text()
+    assert text.startswith("# Hello\n")
+    assert "Claude Code `session`" in text
+    assert text.endswith("## User\n\nHello\n")
     assert runner.invoke(app, [str(path), "--format", "invalid"]).exit_code != 0
     assert runner.invoke(app, [str(path), "-o", str(path)]).exit_code != 0
 
@@ -608,3 +618,195 @@ def test_invalid_link_target_is_not_followed(tmp_path: Path) -> None:
     )
     with pytest.raises(SessionError, match="Invalid linked"):
         continuation_paths(path)
+
+
+def test_claude_turns_merge_with_activity_and_model_switches(tmp_path: Path) -> None:
+    def reply(model: str, *blocks: dict) -> dict:
+        return claude("assistant", list(blocks), effort="high") | {"message": {"model": model, "content": list(blocks)}}
+
+    path = write_jsonl(
+        tmp_path / "session.jsonl",
+        [
+            claude("user", "Fix it", origin={"kind": "human"}, cwd="/work/app", gitBranch="main", timestamp="2026-09-10T10:00:00Z"),
+            reply("opus", {"type": "text", "text": "Looking."}),
+            reply("opus", {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "ls"}}),
+            reply("opus", {"type": "tool_use", "id": "r", "name": "Read", "input": {"file_path": "/work/app/a.py"}}),
+            reply("opus", {"type": "tool_use", "id": "e", "name": "Edit", "input": {"file_path": "/work/app/src/a.py"}}),
+            reply("opus", {"type": "tool_use", "id": "m", "name": "mcp__docs__read", "input": {}}),
+            reply("opus", {"type": "text", "text": "Fixed."}),
+            claude("user", "Thanks", origin={"kind": "human"}, timestamp="2026-09-10T10:30:00Z"),
+            reply("sonnet", {"type": "text", "text": "Welcome."}),
+            {"type": "ai-title", "aiTitle": "Fix the app", "sessionId": "session"},
+        ],
+    )
+    entries = list(entries_from(path))
+    assert ModelChange("opus", "high") in entries
+    assert ToolUse("edit", "Edit", ("/work/app/src/a.py",)) in entries
+    assert not any(isinstance(entry, ToolUse) and entry.name == "Read" for entry in entries)
+
+    info = session_info(path)
+    assert (info.title, info.cwd, info.branch, info.first_prompt) == ("Fix the app", "/work/app", "main", "Fix it")
+    text = render(entries, info=info)
+    assert text.startswith("# Fix the app\n")
+    assert "- **Project:** `/work/app` (branch `main`)" in text
+    assert "- **Models:** opus (high effort), then sonnet (high effort)" in text
+    body = text.split("---\n\n", 1)[1]
+    assert body == (
+        "## User\n\nFix it\n\n## Agent\n\nLooking.\n\nFixed.\n\n"
+        "*Tool activity: 1 command; edited `src/a.py`; mcp__docs__read.*\n\n"
+        "## User\n\nThanks\n\n> Switched to sonnet (high effort).\n\n## Agent\n\nWelcome."
+    )
+    assert "Tool activity" not in render(entries, info=info, activity=False)
+
+
+def test_codex_exec_scripts_and_turn_context_become_activity(tmp_path: Path) -> None:
+    script = 'text(await tools.exec_command({cmd:"ls"})); await tools.write_stdin({}); await tools.exec_command({cmd:"pwd"});'
+    patch = 'await tools.apply_patch("*** Begin Patch\\n*** Update File: /work/x.py\\n@@\\n*** Add File: y.py\\n*** End Patch")'
+    path = write_jsonl(
+        tmp_path / "rollout-2026-01a0c761-a235-7662-948b-685893febde4.jsonl",
+        [
+            {"type": "session_meta", "payload": {"id": "01a0c761-a235-7662-948b-685893febde4", "originator": "codex-tui", "cwd": "/work"}},
+            {"type": "turn_context", "payload": {"model": "gpt-a", "effort": "medium"}},
+            response("message", role="user", content=[{"type": "input_text", "text": "Go"}]),
+            response("custom_tool_call", name="exec", input=script),
+            response("custom_tool_call", name="exec", input=patch),
+            response("function_call", name="wait", arguments="{}"),
+            response("web_search_call"),
+            response("message", role="assistant", content=[{"type": "output_text", "text": "Done"}]),
+            {"type": "turn_context", "payload": {"model": "gpt-b", "effort": "medium"}},
+        ],
+    )
+    text = render(entries_from(path), info=session_info(path))
+    assert "*Tool activity: 2 commands; edited `x.py`, `y.py`; 1 web lookup.*" in text
+    assert text.endswith("> Switched to gpt-b (medium effort).")
+
+
+def test_rewritten_codex_fragment_is_silent_but_lost_records_warn(tmp_path: Path) -> None:
+    full = json.dumps(
+        {"ordinal": 5, "type": "response_item", "payload": {"type": "custom_tool_call", "id": "ctc_1", "input": "x"}}, separators=(",", ":")
+    )
+    fragment = full[:-10]
+    path = tmp_path / "session.jsonl"
+    path.write_text(f"{fragment}\n{full}\n")
+    with warnings_recorded() as caught:
+        list(scripts_agent_export._records(path))
+    assert caught == []
+    path.write_text(f"{fragment}\n")
+    with warnings_recorded() as caught:
+        list(scripts_agent_export._records(path))
+    assert len(caught) == 1
+
+
+def warnings_recorded():
+    import warnings
+
+    class Recorder:
+        def __enter__(self) -> list[str]:
+            self._context = warnings.catch_warnings(record=True)
+            self._caught = self._context.__enter__()
+            warnings.simplefilter("always", ExportWarning)
+            self.messages: list[str] = []
+            return self.messages
+
+        def __exit__(self, *exc: object) -> None:
+            self.messages += [str(item.message) for item in self._caught]
+            self._context.__exit__(*exc)
+
+    return Recorder()
+
+
+def test_cli_saves_dated_titled_markdown_when_run_in_a_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def session(name: str) -> Path:
+        return write_jsonl(
+            tmp_path / f"{name}.jsonl",
+            [
+                claude("user", "Hello", origin={"kind": "human"}, cwd="/w", timestamp="2026-09-10T10:00:00Z"),
+                {"type": "ai-title", "aiTitle": "Review: prompt-add (v2)!", "sessionId": name},
+            ],
+        )
+
+    first, second = session("aaaaaaaa-1"), session("bbbbbbbb-2")
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.chdir(out)
+    monkeypatch.setattr(scripts_agent_export, "_stdout_is_terminal", lambda: True)
+    runner = CliRunner()
+    date = scripts_agent_export._time("2026-09-10T10:00:00Z").strftime("%Y-%m-%d")
+    expected = out / f"{date}-review-prompt-add-v2.md"
+
+    result = runner.invoke(app, [str(first)])
+    assert result.exit_code == 0, result.stderr
+    assert expected.is_file()
+    assert f"Saved {expected.name} (1 message" in result.stderr
+    assert runner.invoke(app, [str(first)]).exit_code == 0  # Re-export replaces its own file.
+    assert runner.invoke(app, [str(second)]).exit_code == 0  # Another session never does.
+    assert {path.name for path in out.iterdir()} == {expected.name, f"{date}-review-prompt-add-v2-bbbbbbbb.md"}
+
+    assert runner.invoke(app, [str(first), "-o", str(tmp_path)]).exit_code == 0
+    assert (tmp_path / expected.name).is_file()
+    assert runner.invoke(app, [str(first), "-o", "t.json"]).exit_code == 0
+    assert json.loads((out / "t.json").read_text())[0]["text"] == "Hello"
+    result = runner.invoke(app, [str(first), "-o", "-"])
+    assert result.stdout.startswith("# Review: prompt-add (v2)!")
+
+
+def test_cli_prints_markdown_when_piped(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [claude("user", "Hello")])
+    result = CliRunner().invoke(app, [str(path)])
+    assert result.exit_code == 0
+    assert result.stdout.startswith("# Hello\n") and "## User\n\nHello" in result.stdout
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_recent_sessions_lists_interactive_sessions_with_titles(tmp_path: Path) -> None:
+    claude_root, codex_root = tmp_path / ".claude", tmp_path / ".codex"
+    (claude_root / "projects" / "p" / "c1" / "subagents").mkdir(parents=True)
+    write_jsonl(
+        claude_root / "projects" / "p" / "c1.jsonl",
+        [claude("user", "Build it", origin={"kind": "human"}, cwd="/w"), {"type": "custom-title", "customTitle": "Named"}],
+    )
+    command = "<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>42</command-args>"
+    write_jsonl(claude_root / "projects" / "p" / "c3.jsonl", [claude("user", command, origin={"kind": "human"})])
+    write_jsonl(claude_root / "projects" / "p" / "c2.jsonl", [claude("user", [{"type": "tool_result"}])])
+    write_jsonl(claude_root / "projects" / "p" / "c1" / "subagents" / "agent.jsonl", [claude("user", "x", origin={"kind": "human"})])
+    day = codex_root / "sessions" / "2026" / "09" / "10"
+    day.mkdir(parents=True)
+    ids = {name: f"0000000{index}-0000-0000-0000-000000000000" for index, name in enumerate(["cli", "exec", "sub", "empty"])}
+    for name, source in [("cli", "cli"), ("exec", "exec"), ("sub", {"subagent": {}}), ("empty", "cli")]:
+        prompt = [] if name == "empty" else [event("user_message", message=f"\n  {name} prompt\nmore")]
+        if name == "cli":  # Newer Codex records the prompt only as a response item, after injected context.
+            prompt = [
+                response("message", role="user", content=[{"type": "input_text", "text": "<environment_context>x</environment_context>"}]),
+                response("message", role="user", content=[{"type": "input_text", "text": "\n  cli prompt\nmore"}]),
+            ]
+        meta = {"type": "session_meta", "payload": {"id": ids[name], "originator": "codex-tui", "source": source, "cwd": "/w"}}
+        write_jsonl(day / f"rollout-2026-{ids[name]}.jsonl", [meta, *prompt])
+    (codex_root / "session_index.jsonl").write_text(json.dumps({"id": ids["cli"], "thread_name": "Codex title"}) + "\n")
+
+    sessions = recent_sessions([claude_root, codex_root])
+    assert sorted(((info.format, info.title, info.first_prompt) for info in sessions), key=str) == [
+        (SessionFormat.CLAUDE, "Named", "Build it"),
+        (SessionFormat.CLAUDE, None, "/review 42"),
+        (SessionFormat.CODEX, "Codex title", "cli prompt"),
+    ]
+
+
+def test_picker_requires_fzf_and_returns_the_chosen_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / ".claude"
+    (root / "projects" / "p").mkdir(parents=True)
+    path = write_jsonl(root / "projects" / "p" / "s.jsonl", [claude("user", "Hi", origin={"kind": "human"}, cwd=str(tmp_path))])
+    monkeypatch.setattr(scripts_agent_export.shutil, "which", lambda name: None)
+    with pytest.raises(SessionError, match="install fzf"):
+        scripts_agent_export.pick_session([root])
+
+    rows: list[str] = []
+
+    def fake_fzf(command: list[str], *, input: str, **kwargs: object) -> object:
+        rows.append(input)
+        return type("Result", (), {"returncode": 0, "stdout": input.splitlines()[0] + "\n"})()
+
+    monkeypatch.setattr(scripts_agent_export.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(scripts_agent_export.subprocess, "run", fake_fzf)
+    monkeypatch.chdir(tmp_path)
+    assert scripts_agent_export.pick_session([root]) == path
+    assert rows[0].split("\t")[1].split()[-2:] == [".", "Hi"]
