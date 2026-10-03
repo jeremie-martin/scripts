@@ -11,6 +11,7 @@ from scripts_agent_export import (
     SessionFormat,
     ToolUse,
     app,
+    codex_continuation_paths,
     continuation_paths,
     conversation_from,
     detect_session_format,
@@ -377,6 +378,127 @@ def test_continuation_cycle_fails(tmp_path: Path) -> None:
     )
     with pytest.raises(SessionError, match="Cyclic"):
         continuation_paths(path)
+
+
+def codex_rollout(path: Path, records: list[dict], *, day: str, base: str | None = None, session_id: str = "thread") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    meta = {"id": session_id, "originator": "codex-tui", "timestamp": f"2026-10-{day}T10:00:00Z"}
+    if base:
+        meta["history_base"] = {"thread_id": base, "end_ordinal_exclusive": 3, "end_byte_offset": 100}
+    return write_jsonl(path, [{"type": "session_meta", "payload": meta}, *records])
+
+
+def test_codex_resumes_across_dates_keep_history_and_source_locations(tmp_path: Path) -> None:
+    root = tmp_path / ".codex"
+    first = codex_rollout(
+        root / "sessions/2026/10/01/rollout-2026-10-01-thread.jsonl",
+        [
+            event("task_started", turn_id="first-turn"),
+            response("message", id="u1", role="user", content="Original"),
+            {**response("message", id="a1", role="assistant", content="Done"), "ordinal": 4},
+        ],
+        day="01",
+    )
+    second = codex_rollout(
+        root / "sessions/2026/10/02/rollout-2026-10-02-thread_resume1.jsonl",
+        [
+            event("task_started", turn_id="second-turn"),
+            {**response("message", id="u2", role="user", content="Continue"), "ordinal": 4},
+            {
+                "type": "compacted",
+                "payload": {"replacement_history": [{"type": "message", "role": "user", "content": "Original"}]},
+            },
+            response("message", id="a2", role="assistant", content="Done"),
+        ],
+        day="02",
+        base="thread",
+    )
+    third = codex_rollout(
+        root / "archived_sessions/rollout-2026-10-03-thread_resume2.jsonl",
+        [event("task_started", turn_id="third-turn"), response("message", role="user", content="Latest")],
+        day="03",
+        base="thread",
+    )
+    codex_rollout(
+        first.parent / "rollout-2026-10-01-fork.jsonl",
+        [response("message", role="user", content="Separate fork")],
+        day="01",
+        base="thread",
+        session_id="fork",
+    )
+    expected = [
+        Message("USER", "Original"), Message("AGENT", "Done"), Message("USER", "Continue"),
+        Message("AGENT", "Done"), Message("USER", "Latest"),
+    ]
+    assert resolve_session("thread", [root]) == first
+    for selected in (first, second, third):
+        assert codex_continuation_paths(selected) == [first, second, third]
+        messages = [m for m in conversation_from(selected) if m.role in {"USER", "AGENT"}]
+        assert messages == expected
+        assert [(m.source, m.line) for m in messages] == [
+            (str(first), 3), (str(first), 4), (str(second), 3), (str(second), 5), (str(third), 3),
+        ]
+    assert [m.text for m in conversation_from(first, single_session=True)] == ["Original", "Done"]
+    result = CliRunner().invoke(app, [str(third)])
+    assert result.exit_code == 0
+    assert "2026-10-01" in result.stdout
+    assert "Latest" in result.stdout
+    assert "earlier exchanges retained" in result.stdout
+
+
+def test_codex_resume_preserves_question_lookup_and_mirror_deduplication(tmp_path: Path) -> None:
+    first = codex_rollout(
+        tmp_path / "rollout-2026-10-01-thread.jsonl",
+        [
+            event("task_started", turn_id="turn"),
+            response("message", role="assistant", content="Picking a color"),
+            response(
+                "function_call", name="request_user_input", call_id="q",
+                arguments=json.dumps({"questions": [{"id": "color", "title": "Which color?"}]}),
+            ),
+        ],
+        day="01",
+    )
+    codex_rollout(
+        tmp_path / "rollout-2026-10-02-thread_resume.jsonl",
+        [
+            event("agent_message", message="Picking a color"),
+            response("function_call_output", call_id="q", output=json.dumps({"answers": {"color": {"answers": ["Green"]}}})),
+        ],
+        day="02",
+        base="thread",
+    )
+    assert [m for m in conversation_from(first) if m.role != "NOTICE"] == [
+        Message("AGENT", "Picking a color"), Message("AGENT", "Which color?"), Message("USER", "Which color?\nGreen"),
+    ]
+
+
+def test_codex_resume_missing_base_warns_and_strict_refuses_output(tmp_path: Path) -> None:
+    path = codex_rollout(
+        tmp_path / "rollout-2026-10-02-thread_resume.jsonl",
+        [response("message", role="user", content="Latest")],
+        day="02",
+        base="thread",
+    )
+    assert resolve_session("thread", [tmp_path]) == path
+    with pytest.warns(ExportWarning, match="linked Codex history is missing"):
+        assert [m.text for m in conversation_from(path)] == ["Latest"]
+    output = tmp_path / "out.md"
+    result = CliRunner().invoke(app, [str(path), "--strict", "-o", str(output)])
+    assert result.exit_code == 1
+    assert not output.exists()
+    assert "linked Codex history is missing" in result.stderr
+    assert CliRunner().invoke(app, [str(path), "--strict", "--single-session"]).exit_code == 0
+
+
+def test_codex_unlinked_logs_with_same_id_remain_ambiguous(tmp_path: Path) -> None:
+    first = codex_rollout(tmp_path / "rollout-2026-10-01-thread.jsonl", [], day="01")
+    codex_rollout(tmp_path / "rollout-2026-10-02-thread_other.jsonl", [], day="02")
+    with pytest.raises(SessionError, match="Multiple sessions"):
+        resolve_session("thread", [tmp_path])
+    with pytest.raises(SessionError, match="Ambiguous Codex"):
+        list(conversation_from(first))
+    assert list(conversation_from(first, single_session=True)) == []
 
 
 def test_unknown_conversation_block_warns_and_preserves_text(tmp_path: Path) -> None:

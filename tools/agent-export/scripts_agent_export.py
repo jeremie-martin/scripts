@@ -542,15 +542,16 @@ def _message_key(message: Message) -> tuple[str, str]:
     return message.role, text.strip()
 
 
-def _codex_records(path: Path) -> Iterator[tuple[str, Record]]:
+def _codex_records(paths: Sequence[Path]) -> Iterator[tuple[str, Path, Record]]:
     scope = "initial"
-    for record in _records(path):
-        payload = _mapping(record.get("payload"))
-        if record.get("type") == "event_msg" and payload.get("type") == "task_started":
-            scope = str(payload.get("turn_id") or record["_line"])
-        elif record.get("type") == "turn_context" and payload.get("turn_id"):
-            scope = str(payload["turn_id"])
-        yield scope, record
+    for path in paths:
+        for record in _records(path):
+            payload = _mapping(record.get("payload"))
+            if record.get("type") == "event_msg" and payload.get("type") == "task_started":
+                scope = str(payload.get("turn_id") or f"{path}:{record['_line']}")
+            elif record.get("type") == "turn_context" and payload.get("turn_id"):
+                scope = str(payload["turn_id"])
+            yield scope, path, record
 
 
 def _contains_executable_question(code: str) -> bool:
@@ -560,11 +561,12 @@ def _contains_executable_question(code: str) -> bool:
     return bool(re.search(r"(?:tools|functions)\.request_user_input(?:_async)?\s*\(", code))
 
 
-def _codex_entries(path: Path) -> Iterator[Entry]:
+def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None) -> Iterator[Entry]:
     # Event and response messages are two representations of the same exchange.
     # Match occurrence counts, not a text set: repeated real messages must survive.
+    paths = paths or [path]
     counts: list[Counter[tuple[str, str, str]]] = [Counter() for _ in range(4)]
-    for scope, record in _codex_records(path):
+    for scope, _, record in _codex_records(paths):
         representation = _codex_representation(record)
         if representation:
             lane, message = representation
@@ -572,9 +574,15 @@ def _codex_entries(path: Path) -> Iterator[Entry]:
     occurrences: list[Counter[tuple[str, str, str]]] = [Counter() for _ in range(4)]
     history: Counter[Message] = Counter()
     calls: dict[str, tuple[str, Record]] = {}
-    for scope, record in _codex_records(path):
+    for scope, path, record in _codex_records(paths):
         payload = _mapping(record.get("payload"))
         kind = payload.get("type")
+        if record.get("type") == "session_meta" and len(paths) > 1:
+            text = f"Session log: {path.name}"
+            boundary = _mapping(payload.get("history_base")).get("end_ordinal_exclusive")
+            if boundary is not None:
+                text += f". Resumed from history before record {boundary}; earlier exchanges retained above."
+            yield _located(Message("NOTICE", text), record, path)
         if record.get("type") == "turn_context" and isinstance(payload.get("model"), str):
             effort = payload.get("effort")
             yield ModelChange(payload["model"], effort if isinstance(effort, str) else None)
@@ -700,7 +708,71 @@ def _record_session_ids(record: Record) -> set[str]:
 
 def _filename_matches(path: Path, session_id: str) -> bool:
     stem = path.stem
-    return stem == session_id or stem.endswith(f"-{session_id}")
+    return (
+        stem == session_id
+        or stem.endswith(f"-{session_id}")
+        or (stem.startswith("rollout-") and stem.rsplit("_", 1)[0].endswith(f"-{session_id}"))
+    )
+
+
+def _codex_meta(path: Path) -> Record:
+    """Read only the rollout header when discovering related log files."""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            record = _json_object(handle.readline())
+    except OSError:
+        return {}
+    return _mapping(record.get("payload")) if record.get("type") == "session_meta" else {}
+
+
+def _codex_id(meta: Record) -> str | None:
+    value = meta.get("id") or meta.get("session_id")
+    return value if isinstance(value, str) else None
+
+
+def _codex_segment_order(paths: Sequence[Path], session_id: str) -> list[Path] | None:
+    """Accept one thread's base log and explicitly linked resumes, never another fork."""
+    headers = [(path, _codex_meta(path)) for path in paths]
+    if any(_codex_id(meta) != session_id for _, meta in headers):
+        return None
+    bases = [(path, meta) for path, meta in headers if not meta.get("history_base")]
+    if len(bases) > 1:
+        return None
+    resumes = [(path, meta) for path, meta in headers if meta.get("history_base")]
+    if any(_mapping(meta.get("history_base")).get("thread_id") != session_id for _, meta in resumes):
+        return None
+    resumes.sort(key=lambda pair: (str(pair[1].get("timestamp", "")), str(pair[0])))
+    return [path for path, _ in [*bases, *resumes]]
+
+
+def codex_continuation_paths(path: Path) -> list[Path]:
+    """Find explicit resumes of the same Codex thread across dated log directories."""
+    meta = _codex_meta(path)
+    session_id = _codex_id(meta)
+    if not session_id:
+        return [path]
+    # A copied rollout can still find its siblings; installed logs span dates and
+    # may have moved between sessions/ and archived_sessions/.
+    root = next((p for p in path.parents if p.name in {"sessions", "archived_sessions"}), path.parent)
+    roots = [root]
+    if root.name in {"sessions", "archived_sessions"}:
+        roots = [root.parent / "sessions", root.parent / "archived_sessions"]
+    candidates = [path]
+    for directory in roots:
+        for candidate in directory.rglob("*.jsonl"):
+            if _filename_matches(candidate, session_id) and _codex_id(_codex_meta(candidate)) == session_id:
+                candidates.append(candidate)
+    paths = _codex_segment_order(_unique_resolved(candidates), session_id)
+    if paths is None:
+        if len(_unique_resolved(candidates)) > 1:
+            raise SessionError("Ambiguous Codex continuation files; use --single-session to export one file.")
+        paths = [path]
+    base = _mapping(_codex_meta(paths[0]).get("history_base"))
+    if base:
+        warnings.warn(
+            f"{paths[0]}: linked Codex history is missing (thread {base.get('thread_id')})", ExportWarning, stacklevel=2
+        )
+    return paths
 
 
 def _candidate_matches(path: Path, session_id: str) -> bool:
@@ -766,6 +838,8 @@ def resolve_session(source: str, roots: Sequence[Path] = DEFAULT_SESSION_ROOTS) 
         searched = ", ".join(str(root.expanduser()) for root in roots)
         raise SessionError(f"Session not found: {source} (searched {searched})")
     if len(matches) > 1:
+        if joined := _codex_segment_order(matches, source):
+            return joined[0]
         details = "\n".join(f"  {match}" for match in matches)
         raise SessionError(f"Multiple sessions matched {source!r}:\n{details}")
     return matches[0]
@@ -843,18 +917,19 @@ def continuation_paths(path: Path) -> list[Path]:
 
 
 def conversation_entries(path: Path, *, single_session: bool = False, session_format: SessionFormat | None = None) -> Iterator[Entry]:
-    """Yield the entries of a session, joined with its explicit Claude continuations."""
+    """Yield the entries of a session, joined with its explicit continuations."""
 
     session_format = session_format or detect_session_format(path)
-    paths = continuation_paths(path) if session_format is SessionFormat.CLAUDE and not single_session else [path]
+    if session_format is SessionFormat.CODEX:
+        paths = [path] if single_session else codex_continuation_paths(path)
+        yield from _codex_entries(path, paths=paths)
+        return
+    paths = [path] if single_session else continuation_paths(path)
     seen: set[str] = set()
     for source in paths:
         if len(paths) > 1:
             yield Message("NOTICE", f"Session {source.stem}", source=str(source))
-        if session_format is SessionFormat.CLAUDE:
-            yield from _claude_entries(source, seen)
-        else:
-            yield from _codex_entries(source)
+        yield from _claude_entries(source, seen)
 
 
 def conversation_from(path: Path, *, single_session: bool = False) -> Iterator[Message]:
@@ -1311,7 +1386,9 @@ def export(
         ),
     ] = None,
     activity: Annotated[bool, typer.Option(help="End each agent turn with a one-line summary of its tool use.")] = True,
-    single_session: Annotated[bool, typer.Option(help="Export only this file, without joining explicit Claude continuations.")] = False,
+    single_session: Annotated[
+        bool, typer.Option(help="Export only this file, without joining Claude continuations or Codex resumes.")
+    ] = False,
     strict: Annotated[bool, typer.Option(help="Fail without producing an export if completeness warnings occur.")] = False,
 ) -> None:
     """Export a session's prompts, replies, questions, answers, plans, and summaries as a readable transcript."""
@@ -1324,6 +1401,10 @@ def export(
             session_format = detect_session_format(path)
             entries = list(conversation_entries(path, single_session=single_session, session_format=session_format))
             info = session_info(path, session_format)
+            if session_format is SessionFormat.CODEX and not single_session:
+                first_source = next((entry.source for entry in entries if isinstance(entry, Message) and entry.source), None)
+                if first_source and Path(first_source) != path:
+                    info = session_info(Path(first_source), session_format)
         diagnostics = list(dict.fromkeys(str(warning.message) for warning in caught))
         for diagnostic in diagnostics:
             typer.echo(f"Warning: {diagnostic}", err=True)

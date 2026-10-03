@@ -34,7 +34,7 @@ agent-export SESSION_ID -o notes/         # into a directory, with the default n
 agent-export SESSION_ID -o session.json   # format follows the extension (.md, .txt, .json)
 agent-export SESSION_ID -o -              # stdout, even in a terminal
 agent-export SESSION_ID --no-activity     # omit the per-turn tool activity lines
-agent-export SESSION_ID --single-session  # do not join Claude continuations
+agent-export SESSION_ID --single-session  # do not join continuation/resume files
 agent-export SESSION_ID --strict          # refuse to export if anything may be missing
 ```
 
@@ -62,7 +62,11 @@ The `text` format has the same structure without markdown; `json` is one object 
 visible message with its source file, JSONL line, and timestamp.
 
 Explicit Claude continuation links are followed in both directions by default;
-copied records are deduplicated by message UUID. Codex's response, event, and
+copied records are deduplicated by message UUID. Codex resume files carrying the
+same thread ID and explicit history-base metadata are joined across dated session
+and archive directories, including when a resume file is selected directly. Each
+file boundary is marked; earlier exchanges are retained even when a resume starts
+from an older history checkpoint. Codex's response, event, and
 completed-item representations are matched by occurrence within a turn, so
 ordinary repeated replies survive. Codex forks are exported as the selected
 branch's recorded history; separate forks and subagents are not automatically
@@ -72,7 +76,7 @@ Images, audio, and documents retain references or explicit embedded-attachment
 placeholders; their binary contents are not included. Some Codex compactions
 contain only encrypted summaries: the export marks that limitation and preserves
 the readable history. Unknown conversation blocks, malformed JSON lines, and missing
-linked Claude sessions produce warnings on stderr. A partial Codex write that is
+linked sessions or Codex history produce warnings on stderr. A partial Codex write that is
 followed by the complete record loses nothing and is skipped silently. Questions
 embedded inside executable tool scripts cannot currently be reconstructed; detected
 calls produce a warning. This is a readable transcript, not a lossless backup; keep
