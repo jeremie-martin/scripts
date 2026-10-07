@@ -932,3 +932,99 @@ def test_picker_requires_fzf_and_returns_the_chosen_path(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)
     assert scripts_agent_export.pick_session([root]) == path
     assert rows[0].split("\t")[1].split()[-2:] == [".", "Hi"]
+
+
+@pytest.mark.parametrize("output_format", ["markdown", "text", "json"])
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_include_tools_cli(tmp_path: Path, provider: str, output_format: str) -> None:
+    if provider == "claude":
+        records = [
+            claude("user", "Run the command"),
+            claude("assistant", [
+                {"type": "text", "text": "Checking now"},
+                {"type": "thinking", "thinking": "hidden reasoning"},
+                {"type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "echo tool-input"}},
+            ]),
+            claude("user", [{"type": "tool_result", "tool_use_id": "call-1", "content": "tool-output ```", "is_error": True}]),
+            claude("assistant", "Finished"),
+        ]
+    else:
+        records = [
+            response("message", role="user", content="Run the command"),
+            response("message", role="assistant", content="Checking now"),
+            response("reasoning", summary=[{"type": "summary_text", "text": "hidden reasoning"}]),
+            response("function_call", call_id="call-1", name="functions.exec_command", arguments='{"cmd":"echo tool-input"}'),
+            response("function_call_output", call_id="call-1", output="tool-output ```"),
+            response("message", role="assistant", content="Finished"),
+        ]
+    path = write_jsonl(tmp_path / "session.jsonl", records)
+    runner = CliRunner()
+    default = runner.invoke(app, [str(path), "--format", output_format, "-o", "-"])
+    assert default.exit_code == 0, default.output
+    assert "tool-input" not in default.stdout and "tool-output" not in default.stdout
+    detailed = runner.invoke(app, [str(path), "--include-tools", "--no-activity", "--format", output_format, "-o", "-"])
+    assert detailed.exit_code == 0, detailed.output
+    assert "hidden reasoning" not in detailed.stdout
+    assert "Tool activity:" not in detailed.stdout
+    assert detailed.stdout.index("Checking now") < detailed.stdout.index("tool-input") < detailed.stdout.index("tool-output")
+    assert detailed.stdout.index("tool-output") < detailed.stdout.index("Finished")
+    if output_format == "json":
+        messages = json.loads(detailed.stdout)
+        assert [m["role"] for m in messages] == ["USER", "AGENT", "TOOL_CALL", "TOOL_RESULT", "AGENT"]
+        assert messages[2]["source"] == str(path)
+        assert messages[2]["line"] is not None
+        assert json.loads(messages[2]["text"])["type"] in {"tool_use", "function_call"}
+    elif output_format == "markdown":
+        assert "````json" in detailed.stdout  # Embedded fences cannot close a tool block.
+        assert "Conversation with recorded tool calls and results" in detailed.stdout
+
+
+def test_include_codex_custom_native_and_event_tools(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        response("custom_tool_call", call_id="exec-1", name="exec", input="await tools.example({})"),
+        event("custom_tool_call_output", call_id="exec-1", output="first result"),
+        response("custom_tool_call_output", call_id="exec-1", output="first result"),
+        event("custom_tool_call_output", call_id="exec-2", output="event only"),
+        response("local_shell_call", call_id="shell-1", action={"command": ["pwd"]}),
+        response("local_shell_call_output", call_id="shell-1", output="/project"),
+        response("web_search_call", id="web-1", action={"query": "example"}),
+    ])
+    messages = [e for e in entries_from(path, include_tools=True) if isinstance(e, Message)]
+    assert [json.loads(m.text)["type"] for m in messages] == [
+        "custom_tool_call", "custom_tool_call_output", "custom_tool_call_output",
+        "local_shell_call", "local_shell_call_output", "web_search_call",
+    ]
+    assert sum("first result" in m.text for m in messages) == 1
+
+
+def test_include_tools_claude_continuations_and_attachments(tmp_path: Path) -> None:
+    call = claude("assistant", [{"type": "tool_use", "id": "read-1", "name": "Read", "input": {"file_path": "picture.png"}}], uuid="call")
+    first = write_jsonl(tmp_path / "first.jsonl", [
+        call, {"type": "continued-in", "sessionId": "first", "continuedInSessionId": "second"},
+    ])
+    write_jsonl(tmp_path / "second.jsonl", [
+        call,
+        claude("user", [{"type": "tool_result", "tool_use_id": "read-1", "content": [
+            {"type": "image", "source": {"type": "base64", "data": "binary-content"}},
+        ]}]),
+    ])
+    entries = list(scripts_agent_export.conversation_entries(first, include_tools=True))
+    messages = [e for e in entries if isinstance(e, Message) and e.role in {"TOOL_CALL", "TOOL_RESULT"}]
+    assert len(messages) == 2
+    assert "embedded attachment" in messages[1].text
+    assert "binary-content" not in render(entries)
+    single = list(scripts_agent_export.conversation_entries(first, include_tools=True, single_session=True))
+    assert not any(isinstance(e, Message) and e.role == "TOOL_RESULT" for e in single)
+
+
+def test_include_tools_keeps_distinct_unidentified_results_and_arbitrary_arguments(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        response("function_call", name="example", arguments={"type": ["arbitrary", "data"]}),
+        event("function_call_output", output="event output"),
+        response("function_call_output", output="different response output"),
+    ])
+    messages = [e for e in entries_from(path, include_tools=True) if isinstance(e, Message)]
+    assert len(messages) == 3
+    assert json.loads(messages[0].text)["arguments"] == {"type": ["arbitrary", "data"]}
+    assert json.loads(messages[1].text)["output"] == "event output"
+    assert json.loads(messages[2].text)["output"] == "different response output"

@@ -1,9 +1,7 @@
-"""Export the visible part of a Claude or Codex JSONL session.
+"""Export Claude and Codex conversations, optionally including recorded tool details.
 
-Session logs contain much more than the conversation shown to a person: model
-reasoning, tool calls, tool results, injected context, and bookkeeping records.
-This module deliberately has one small job: turn the two supported log formats
-into the same stream of visible user/agent messages.
+Both log formats become a shared stream of messages, activity, and model changes.
+Model reasoning, injected context, and bookkeeping records remain omitted.
 """
 
 from __future__ import annotations
@@ -36,7 +34,7 @@ class SessionFormat(StrEnum):
     CODEX = "codex"
 
 
-Role = Literal["USER", "AGENT", "SUMMARY", "NOTICE"]
+Role = Literal["USER", "AGENT", "SUMMARY", "NOTICE", "TOOL_CALL", "TOOL_RESULT"]
 Record = dict[str, object]
 
 
@@ -399,7 +397,30 @@ def _codex_tool_uses(payload: Record) -> Iterator[ToolUse]:
                 yield use
 
 
-def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iterator[Entry]:
+CODEX_TOOL_CALLS = {"function_call", "custom_tool_call", "local_shell_call", "web_search_call"}
+CODEX_TOOL_RESULTS = {"function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+TOOL_ROLES = {"TOOL_CALL", "TOOL_RESULT"}
+
+
+def _tool_payload(value: object) -> object:
+    """Retain tool data while replacing structured binary attachments with references."""
+    if isinstance(value, list):
+        return [_tool_payload(item) for item in value]
+    if isinstance(value, dict):
+        if isinstance(value.get("type"), str) and value["type"] in {
+            "image", "input_image", "output_image", "document", "file", "input_file",
+            "audio", "input_audio", "output_audio",
+        }:
+            return "\n".join(_visible_parts([value]))
+        return {key: _tool_payload(item) for key, item in value.items()}
+    return value
+
+
+def _tool_message(payload: Record, *, result: bool = False) -> Message:
+    return Message("TOOL_RESULT" if result else "TOOL_CALL", json.dumps(_tool_payload(payload), ensure_ascii=False, indent=2))
+
+
+def _claude_record(record: Record, calls: dict[str, tuple[str, Record]], *, include_tools: bool = False) -> Iterator[Entry]:
     kind = record.get("type")
     if kind == "system" and record.get("subtype") == "away_summary":
         yield Message("SUMMARY", str(record.get("content", "")))
@@ -440,6 +461,8 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
     blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
     for block in blocks:
         if isinstance(block, dict) and block.get("type") == "tool_use":
+            if include_tools:
+                yield _tool_message(block)
             name = str(block.get("name", ""))
             args = _mapping(block.get("input"))
             if name in DIALOGUE_TOOLS:
@@ -448,6 +471,8 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
             elif use := _claude_tool_use(block):
                 yield use
         elif isinstance(block, dict) and block.get("type") == "tool_result":
+            if include_tools:
+                yield _tool_message(block, result=True)
             call = calls.get(str(block.get("tool_use_id")))
             result = record.get("toolUseResult")
             if call:
@@ -467,7 +492,7 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]]) -> Iter
                 yield visible
 
 
-def _claude_entries(path: Path, seen: set[str] | None = None) -> Iterator[Entry]:
+def _claude_entries(path: Path, seen: set[str] | None = None, *, include_tools: bool = False) -> Iterator[Entry]:
     calls: dict[str, tuple[str, Record]] = {}
     seen = seen if seen is not None else set()
     for record in _records(path):
@@ -476,7 +501,7 @@ def _claude_entries(path: Path, seen: set[str] | None = None) -> Iterator[Entry]
         if isinstance(uuid, str):
             seen.add(uuid)
         # Even copied calls must populate the result lookup for this session.
-        messages = list(_claude_record(record, calls))
+        messages = list(_claude_record(record, calls, include_tools=include_tools))
         if not duplicate:
             for entry in messages:
                 yield _located(entry, record, path) if isinstance(entry, Message) else entry
@@ -561,12 +586,19 @@ def _contains_executable_question(code: str) -> bool:
     return bool(re.search(r"(?:tools|functions)\.request_user_input(?:_async)?\s*\(", code))
 
 
-def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None) -> Iterator[Entry]:
+def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None, include_tools: bool = False) -> Iterator[Entry]:
     # Event and response messages are two representations of the same exchange.
     # Match occurrence counts, not a text set: repeated real messages must survive.
     paths = paths or [path]
     counts: list[Counter[tuple[str, str, str]]] = [Counter() for _ in range(4)]
+    def result_key(scope: str, payload: Record) -> tuple[str, str, str, str]:
+        return scope, str(payload.get("type")), str(payload.get("call_id")), json.dumps(payload.get("output"), sort_keys=True)
+
+    tool_counts: Counter[tuple[str, str, str, str]] = Counter()
     for scope, _, record in _codex_records(paths):
+        payload = _mapping(record.get("payload"))
+        if include_tools and record.get("type") == "response_item" and payload.get("type") in CODEX_TOOL_RESULTS:
+            tool_counts[result_key(scope, payload)] += 1
         representation = _codex_representation(record)
         if representation:
             lane, message = representation
@@ -588,6 +620,16 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None) -> Iterat
             yield ModelChange(payload["model"], effort if isinstance(effort, str) else None)
         elif record.get("type") == "response_item":
             yield from _codex_tool_uses(payload)
+        if include_tools:
+            if record.get("type") == "response_item" and kind in CODEX_TOOL_CALLS | CODEX_TOOL_RESULTS:
+                yield _located(_tool_message(payload, result=kind in CODEX_TOOL_RESULTS), record, path)
+            elif record.get("type") == "event_msg" and kind in CODEX_TOOL_RESULTS:
+                # Some versions store results as events, others also mirror them there.
+                key = result_key(scope, payload)
+                if tool_counts[key]:
+                    tool_counts[key] -= 1
+                else:
+                    yield _located(_tool_message(payload, result=True), record, path)
         visible = None
         representation = _codex_representation(record)
         if representation:
@@ -620,6 +662,7 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None) -> Iterat
                 "web_search_call",
                 "compaction",
                 "local_shell_call",
+                "local_shell_call_output",
             }:
                 warnings.warn(f"{path}:{record['_line']}: unknown Codex response type: {kind}", ExportWarning, stacklevel=2)
                 visible = Message("NOTICE", f"[Unsupported {kind} response; see source log]")
@@ -845,14 +888,14 @@ def resolve_session(source: str, roots: Sequence[Path] = DEFAULT_SESSION_ROOTS) 
     return matches[0]
 
 
-def entries_from(path: Path, session_format: SessionFormat | None = None) -> Iterator[Entry]:
+def entries_from(path: Path, session_format: SessionFormat | None = None, *, include_tools: bool = False) -> Iterator[Entry]:
     """Yield visible messages, tool uses, and model changes from *path* in source order."""
 
     session_format = session_format or detect_session_format(path)
     if session_format is SessionFormat.CLAUDE:
-        yield from _claude_entries(path)
+        yield from _claude_entries(path, include_tools=include_tools)
     else:
-        yield from _codex_entries(path)
+        yield from _codex_entries(path, include_tools=include_tools)
 
 
 def messages_from(path: Path, session_format: SessionFormat | None = None) -> Iterator[Message]:
@@ -916,20 +959,22 @@ def continuation_paths(path: Path) -> list[Path]:
     return paths
 
 
-def conversation_entries(path: Path, *, single_session: bool = False, session_format: SessionFormat | None = None) -> Iterator[Entry]:
+def conversation_entries(
+    path: Path, *, single_session: bool = False, session_format: SessionFormat | None = None, include_tools: bool = False
+) -> Iterator[Entry]:
     """Yield the entries of a session, joined with its explicit continuations."""
 
     session_format = session_format or detect_session_format(path)
     if session_format is SessionFormat.CODEX:
         paths = [path] if single_session else codex_continuation_paths(path)
-        yield from _codex_entries(path, paths=paths)
+        yield from _codex_entries(path, paths=paths, include_tools=include_tools)
         return
     paths = [path] if single_session else continuation_paths(path)
     seen: set[str] = set()
     for source in paths:
         if len(paths) > 1:
             yield Message("NOTICE", f"Session {source.stem}", source=str(source))
-        yield from _claude_entries(source, seen)
+        yield from _claude_entries(source, seen, include_tools=include_tools)
 
 
 def conversation_from(path: Path, *, single_session: bool = False) -> Iterator[Message]:
@@ -1167,7 +1212,7 @@ def _blocks(entries: Iterable[Entry], cwd: str | None, activity: bool, code: str
                 yield "MODEL", f"Switched to {_describe_model(entry)}."
             current = entry
         else:
-            if entry.role != "AGENT":
+            if entry.role not in {"AGENT", *TOOL_ROLES}:
                 yield from pending()
             yield entry.role, entry.text
     yield from pending()
@@ -1207,6 +1252,8 @@ def _header(info: SessionInfo, entries: Sequence[Entry], markdown: bool, activit
     facts.append(("Session", f"{AGENT_NAMES[info.format]} {code}{info.id}{code}"))
     facts.append(("Log", f"{code}{_home(str(info.path))}{code}"))
     note = "Visible conversation only: reasoning, tool calls and their output, and injected context are omitted."
+    if any(isinstance(entry, Message) and entry.role in TOOL_ROLES for entry in entries):
+        note = "Conversation with recorded tool calls and results: reasoning and injected context are omitted."
     if activity:
         note += " Each agent turn ends with a one-line summary of its tool activity."
     title = session_title(info, (entry for entry in entries if isinstance(entry, Message)))
@@ -1229,7 +1276,14 @@ def render(entries: Iterable[Entry], output_format: str = "markdown", *, info: S
     parts = _header(info, entries, markdown, activity) if info else []
     speaker = None
     for kind, text in _blocks(entries, info.cwd if info else None, activity, "`" if markdown else ""):
-        if kind in {"NOTICE", "MODEL"}:
+        if kind in TOOL_ROLES:
+            label = "Tool result" if kind == "TOOL_RESULT" else "Tool call"
+            if markdown:
+                fence = "`" * max(3, max((len(run) + 1 for run in re.findall(r"`+", text)), default=0))
+                parts.append(f"### {label}\n\n{fence}json\n{text}\n{fence}")
+            else:
+                parts.append(f"{label.upper()}:\n{text}")
+        elif kind in {"NOTICE", "MODEL"}:
             parts.append(_quote(text) if markdown else f"[{text}]")
         elif kind == "ACTIVITY":
             parts.append(f"*{text}*" if markdown else f"[{text}]")
@@ -1386,6 +1440,7 @@ def export(
         ),
     ] = None,
     activity: Annotated[bool, typer.Option(help="End each agent turn with a one-line summary of its tool use.")] = True,
+    include_tools: Annotated[bool, typer.Option("--include-tools", help="Include recorded tool calls, arguments, and results.")] = False,
     single_session: Annotated[
         bool, typer.Option(help="Export only this file, without joining Claude continuations or Codex resumes.")
     ] = False,
@@ -1399,7 +1454,9 @@ def export(
             warnings.simplefilter("always", ExportWarning)
             path = pick_session() if source is None else resolve_session(source.strip())
             session_format = detect_session_format(path)
-            entries = list(conversation_entries(path, single_session=single_session, session_format=session_format))
+            entries = list(
+                conversation_entries(path, single_session=single_session, session_format=session_format, include_tools=include_tools)
+            )
             info = session_info(path, session_format)
             if session_format is SessionFormat.CODEX and not single_session:
                 first_source = next((entry.source for entry in entries if isinstance(entry, Message) and entry.source), None)

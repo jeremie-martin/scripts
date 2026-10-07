@@ -33,6 +33,7 @@ title gets its ID appended instead of overwriting.
 agent-export SESSION_ID -o notes/         # into a directory, with the default name
 agent-export SESSION_ID -o session.json   # format follows the extension (.md, .txt, .json)
 agent-export SESSION_ID -o -              # stdout, even in a terminal
+agent-export SESSION_ID --include-tools   # include tool calls, arguments, and results
 agent-export SESSION_ID --no-activity     # omit the per-turn tool activity lines
 agent-export SESSION_ID --single-session  # do not join continuation/resume files
 agent-export SESSION_ID --strict          # refuse to export if anything may be missing
@@ -57,9 +58,19 @@ compresses what was done:
 - A quoted note where the model or effort changed, or where a turn was interrupted,
   rolled back, or compacted.
 
-Model reasoning, tool calls and their output, and injected setup context are omitted.
+By default, model reasoning, tool calls and their output, and injected setup context
+are omitted. Add `--include-tools` to include recorded tool calls, arguments, and
+results in source order, including executable tool scripts, shell calls, and web
+search calls. Tool details appear as labeled JSON blocks in Markdown and text.
+This works with continuation/resume logs and can be combined with `--no-activity`
+to omit the summary lines. Reasoning and injected setup context remain omitted.
+Only details present in the source logs can be exported; truncated tool output
+cannot be recovered.
+
 The `text` format has the same structure without markdown; `json` is one object per
-visible message with its source file, JSONL line, and timestamp.
+message with its source file, JSONL line, and timestamp. With `--include-tools`,
+tool messages have the roles `TOOL_CALL` and `TOOL_RESULT`; their `text` field
+contains the recorded payload serialized as JSON, including call IDs when present.
 
 Explicit Claude continuation links are followed in both directions by default;
 copied records are deduplicated by message UUID. Codex resume files carrying the
