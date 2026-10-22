@@ -1028,3 +1028,227 @@ def test_include_tools_keeps_distinct_unidentified_results_and_arbitrary_argumen
     assert json.loads(messages[0].text)["arguments"] == {"type": ["arbitrary", "data"]}
     assert json.loads(messages[1].text)["output"] == "event output"
     assert json.loads(messages[2].text)["output"] == "different response output"
+
+
+@pytest.mark.parametrize("include_tools", [False, True])
+def test_claude_request_snapshots_never_become_conversation(tmp_path: Path, include_tools: bool) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        claude("user", "Build a clock", uuid="prompt"),
+        {"type": "api-request-blob", "message": {"role": "user", "content": [
+            {"type": "text", "text": "SECRET setup and replayed history"},
+            {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": {"name": "Bash"}}},
+        ]}},
+        {"type": "api-request-blob", "message": {"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "SECRET reasoning"},
+            {"type": "tool_use", "id": "replayed", "name": "Bash", "input": {"command": "SECRET replay"}},
+        ]}},
+        claude("assistant", [{"type": "text", "text": "Done"}], uuid="reply"),
+    ])
+    with warnings_recorded() as caught:
+        assert list(messages_from(path)) == [Message("USER", "Build a clock"), Message("AGENT", "Done")]
+    assert caught == []
+    result = CliRunner().invoke(app, [str(path), "--strict", *(["--include-tools"] if include_tools else [])])
+    assert result.exit_code == 0, result.stderr
+    assert "SECRET" not in result.stdout
+    assert "Unsupported" not in result.stdout
+    assert "Tool activity" not in result.stdout
+
+
+def queued_prompt(text: object, *, source_id: str, origin: str | None = "human", **metadata: object) -> dict:
+    return {
+        "type": "attachment", "uuid": f"delivery-{source_id}", "timestamp": "2026-10-21T10:01:00Z",
+        "attachment": {
+            "type": "queued_command", "source_uuid": source_id, "prompt": text,
+            **({"origin": {"kind": origin}} if origin else {}),
+        }, **metadata,
+    }
+
+
+@pytest.mark.parametrize("include_tools", [False, True])
+def test_claude_queued_followups_preserve_order_and_identity(tmp_path: Path, include_tools: bool) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        claude("user", "Start", uuid="start"),
+        claude("assistant", [{"type": "text", "text": "Working"}]),
+        queued_prompt("yes", source_id="q1"),
+        queued_prompt("yes", source_id="q1", uuid="redelivery"),
+        queued_prompt("yes", source_id="q2"),
+        queued_prompt("Internal job result", source_id="job", origin="task-notification"),
+        queued_prompt("Internal peer message", source_id="peer", origin="peer"),
+        queued_prompt("<task-notification>Internal</task-notification>", source_id="old-job", origin=None),
+        queued_prompt("Legacy human reply", source_id="old-human", origin=None),
+        queued_prompt([{"type": "text", "text": "See this"}, {"type": "image", "source": {"type": "base64", "data": "SECRET"}}],
+                      source_id="image"),
+        claude("user", "yes", uuid="q1"),  # Another representation of the delivered prompt.
+        claude("assistant", [{"type": "text", "text": "Finished"}]),
+    ])
+    with warnings_recorded() as caught:
+        entries = list(scripts_agent_export.conversation_entries(path, include_tools=include_tools))
+    assert caught == []
+    messages = [e for e in entries if isinstance(e, Message)]
+    assert messages == [
+        Message("USER", "Start"), Message("AGENT", "Working"), Message("USER", "yes"), Message("USER", "yes"),
+        Message("USER", "Legacy human reply"), Message("USER", "See this\n\n[image: embedded attachment; see source log]"),
+        Message("AGENT", "Finished"),
+    ]
+    assert messages[2].line == 3
+    assert messages[2].timestamp == "2026-10-21T10:01:00Z"
+    assert "SECRET" not in render(entries)
+
+
+@pytest.mark.parametrize("include_tools", [False, True])
+def test_claude_continuation_keeps_pending_dialogue_and_original_header(tmp_path: Path, include_tools: bool) -> None:
+    first = write_jsonl(tmp_path / "first.jsonl", [
+        claude("user", "Start", uuid="start", origin={"kind": "human"}, cwd="/project", timestamp="2026-10-20T10:00:00Z"),
+        claude("assistant", [{"type": "tool_use", "id": "q", "name": "AskUserQuestion",
+                              "input": {"questions": [{"question": "Which color?"}]}}], uuid="question"),
+        {"type": "ai-title", "aiTitle": "Original title"},
+        {"type": "continued-in", "sessionId": "first", "continuedInSessionId": "second"},
+    ])
+    second = write_jsonl(tmp_path / "second.jsonl", [
+        claude("user", [{"type": "tool_result", "tool_use_id": "q", "content": "Green"}], uuid="answer"),
+        queued_prompt("Continue", source_id="followup"),
+        {"type": "system", "subtype": "compact_boundary", "uuid": "boundary"},
+        claude("user", "Recap: using green", isCompactSummary=True, uuid="summary"),
+        claude("assistant", [{"type": "text", "text": "Done"}], uuid="done"),
+    ])
+    for selected in (first, second):
+        entries = list(scripts_agent_export.conversation_entries(selected, include_tools=include_tools))
+        assert [e for e in entries if isinstance(e, Message) and e.role in {"USER", "AGENT", "SUMMARY"}] == [
+            Message("USER", "Start"), Message("AGENT", "Which color?"), Message("USER", "Continue"),
+            Message("SUMMARY", "Recap: using green"), Message("AGENT", "Done"),
+        ]
+        # Free-text results remain notices, rather than being invented as approvals.
+        assert any(isinstance(e, Message) and e.text == "AskUserQuestion result:\nGreen" for e in entries)
+        result = CliRunner().invoke(app, [str(selected), "--strict", *(["--include-tools"] if include_tools else [])])
+        assert result.exit_code == 0, result.stderr
+        assert result.stdout.startswith("# Original title\n")
+        assert "Claude Code `first`" in result.stdout
+        assert "Context compacted" in result.stdout
+
+
+def test_codex_resume_can_reference_previous_segment_storage_id(tmp_path: Path) -> None:
+    first = codex_rollout(tmp_path / "sessions/2026/10/01/rollout-2026-10-01-thread.jsonl", [
+        event("task_started", turn_id="first"), response("message", role="user", content="Start"),
+    ], day="01")
+    second = codex_rollout(tmp_path / "sessions/2026/10/02/rollout-2026-10-02-thread_segment-2.jsonl", [
+        event("task_started", turn_id="second"), response("message", role="user", content="Follow up"),
+    ], day="02", base="thread")
+    third = codex_rollout(tmp_path / "archived_sessions/rollout-2026-10-03-thread_segment-3.jsonl", [
+        event("task_started", turn_id="third"), response("message", role="user", content="Latest"),
+    ], day="03", base="segment-2")
+    assert resolve_session("thread", [tmp_path]) == first
+    for selected in (first, second, third):
+        assert codex_continuation_paths(selected) == [first, second, third]
+        assert [m.text for m in conversation_from(selected) if m.role == "USER"] == ["Start", "Follow up", "Latest"]
+        assert CliRunner().invoke(app, [str(selected), "--strict"]).exit_code == 0
+
+
+def test_codex_setup_and_answer_envelopes_are_readable(tmp_path: Path) -> None:
+    setup = "# AGENTS.md instructions for /project\n\n<INSTRUCTIONS>SECRET setup</INSTRUCTIONS>"
+    reply = '<send_user_message_question_reply>\n[{"question":"Which color?","answer":"Green"}]\n</send_user_message_question_reply>'
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        response("message", role="user", content=setup),
+        response("message", role="user", content=setup + "\n\nActual prompt"),
+        response("message", role="user", content=reply),
+        event("item_completed", item={"type": "UserMessage", "content": [{"type": "Text", "text": reply}]}),
+        response("message", role="user", content="# AGENTS.md instructions are useful to discuss"),
+    ])
+    assert list(messages_from(path)) == [
+        Message("USER", "Actual prompt"), Message("USER", "Which color?\nGreen"),
+        Message("USER", "# AGENTS.md instructions are useful to discuss"),
+    ]
+
+
+@pytest.mark.parametrize("instructions_first", [False, True])
+def test_codex_mixed_setup_blocks_preserve_the_prompt_in_either_order(tmp_path: Path, instructions_first: bool) -> None:
+    instructions = "# AGENTS.md instructions for /project\n\n<INSTRUCTIONS>SECRET instructions</INSTRUCTIONS>\n\n"
+    environment = "<environment_context>SECRET environment</environment_context>\n\n"
+    setup = instructions + environment if instructions_first else environment + instructions
+    path = write_jsonl(tmp_path / "session.jsonl", [response("message", role="user", content=setup + "Actual prompt")])
+    assert list(messages_from(path)) == [Message("USER", "Actual prompt")]
+
+
+def test_codex_detailed_export_keeps_nested_tool_results_without_reasoning(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        response("custom_tool_call", name="exec", id="ctc-1", call_id="call-1", input='await tools.exec_command({cmd: "pwd"})'),
+        event("item_completed", item={"type": "CommandExecution", "id": "exec-1", "command": ["pwd"],
+                                      "aggregated_output": "/project", "exit_code": 0}),
+        event("item_completed", item={"type": "FileChange", "id": "patch-1", "changes": {"clock.py": {"diff": "+print('hi')"}}}),
+        event("item_completed", item={"type": "Reasoning", "text": "SECRET reasoning"}),
+        event("item_completed", item={"type": "ImageView", "id": "image-1", "content": [
+            {"type": "image", "source": {"type": "base64", "data": "SECRET binary"}},
+        ]}),
+        response("custom_tool_call_output", call_id="call-1", output=[]),
+        response("message", role="assistant", content="Done"),
+    ])
+    detailed = list(entries_from(path, include_tools=True))
+    messages = [e for e in detailed if isinstance(e, Message)]
+    assert [json.loads(m.text)["type"] for m in messages if m.role in scripts_agent_export.TOOL_ROLES] == [
+        "custom_tool_call", "CommandExecution", "FileChange", "ImageView", "custom_tool_call_output",
+    ]
+    assert [m.line for m in messages] == [1, 2, 3, 5, 6, 7]
+    assert '"aggregated_output": "/project"' in render(detailed)
+    assert "SECRET" not in render(detailed)
+    assert [m for m in messages if m.role not in scripts_agent_export.TOOL_ROLES] == list(messages_from(path))
+
+
+def test_codex_completed_tool_with_matching_call_id_is_a_mirror(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [
+        response("function_call", name="exec_command", id="fc-1", call_id="call-1", arguments='{"cmd":"pwd"}'),
+        event("item_completed", item={"type": "CommandExecution", "id": "call-1", "aggregated_output": "/project"}),
+        response("function_call_output", call_id="call-1", output="/project"),
+    ])
+    messages = [e for e in entries_from(path, include_tools=True) if isinstance(e, Message)]
+    assert [m.role for m in messages] == ["TOOL_CALL", "TOOL_RESULT"]
+
+
+def test_future_codex_completed_item_warns_and_strict_keeps_existing_output(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path / "session.jsonl", [event("item_completed", item={"type": "FutureMessage"})])
+    with pytest.warns(ExportWarning, match="unknown Codex completed item: FutureMessage"):
+        assert "Unsupported FutureMessage item" in render(messages_from(path))
+    output = tmp_path / "existing.md"
+    output.write_text("Keep this export")
+    result = CliRunner().invoke(app, [str(path), "--strict", "-o", str(output)])
+    assert result.exit_code == 1
+    assert output.read_text() == "Keep this export"
+
+
+@pytest.fixture
+def audit_logs():
+    from runpy import run_path
+
+    return run_path(str(Path(__file__).parents[1] / "dev/audit_agent_export.py"))["audit"]
+
+
+def test_audit_checks_both_modes_and_joins_without_exposing_text(tmp_path: Path, audit_logs) -> None:
+
+    write_jsonl(tmp_path / "first.jsonl", [
+        claude("user", "PRIVATE prompt", origin={"kind": "human"}, uuid="prompt"),
+        queued_prompt("PRIVATE followup", source_id="followup"),
+        claude("assistant", [{"type": "tool_use", "id": "bash", "name": "Bash", "input": {"command": "PRIVATE command"}}]),
+        {"type": "continued-in", "sessionId": "first", "continuedInSessionId": "second"},
+    ])
+    write_jsonl(tmp_path / "second.jsonl", [
+        claude("user", [{"type": "tool_result", "tool_use_id": "bash", "content": "PRIVATE result"}]),
+        claude("assistant", [{"type": "text", "text": "PRIVATE reply"}]),
+    ])
+    report = audit_logs([tmp_path], days=1)
+    assert report["problems"] == []
+    assert report["totals"]["files"] == 2
+    assert report["totals"]["joined_conversations_checked"] == 1
+    assert report["totals"]["joined_source_files"] == 2
+    assert report["exported_roles"] == {"claude/USER": 2, "claude/AGENT": 1}
+    assert report["detailed_tool_roles"] == {"claude/TOOL_CALL": 1, "claude/TOOL_RESULT": 1}
+    assert "PRIVATE" not in json.dumps(report)
+
+
+def test_audit_reports_missing_history_only_visible_when_joining(tmp_path: Path, audit_logs) -> None:
+    write_jsonl(tmp_path / "first.jsonl", [
+        claude("user", "PRIVATE prompt", origin={"kind": "human"}),
+        {"type": "continued-in", "sessionId": "first", "continuedInSessionId": "missing"},
+    ])
+    report = audit_logs([tmp_path], days=1)
+    assert len(report["problems"]) == 1
+    assert report["problems"][0]["mode"] == "joined"
+    assert "Linked session is missing" in report["problems"][0]["warning"]
+    assert "PRIVATE" not in json.dumps(report)

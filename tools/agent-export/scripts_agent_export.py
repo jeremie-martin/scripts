@@ -213,16 +213,19 @@ def _visible_parts(content: object, *, user: bool = False, human: bool = False) 
             text = block.get("text", "")
             if not isinstance(text, str):
                 continue
-            if user and not human and _is_internal(text):
-                # A setup block may share a message with an actual prompt.
-                # Strip only complete leading setup wrappers, not the whole message.
-                while _is_internal(text):
-                    prefix = next(p for p in INTERNAL_PREFIXES if text.lstrip().startswith(p))
-                    end = "</" + prefix[1:]
-                    if end not in text:
-                        text = ""
+            if user and not human:
+                # Codex setup wrappers may share a block with the actual prompt.
+                # Remove consecutive setup blocks in whichever order they arrive.
+                while text:
+                    instructions = re.match(r"\s*# AGENTS\.md instructions for [^\n]+\n+<INSTRUCTIONS>.*?</INSTRUCTIONS>\s*", text, re.S)
+                    if instructions:
+                        text = text[instructions.end():]
+                    elif _is_internal(text):
+                        prefix = next(p for p in INTERNAL_PREFIXES if text.lstrip().startswith(p))
+                        end = "</" + prefix[1:]
+                        text = text.split(end, 1)[1].lstrip() if end in text else ""
+                    else:
                         break
-                    text = text.split(end, 1)[1].lstrip()
             if text.strip():
                 yield text
         elif kind in {
@@ -399,6 +402,9 @@ def _codex_tool_uses(payload: Record) -> Iterator[ToolUse]:
 
 CODEX_TOOL_CALLS = {"function_call", "custom_tool_call", "local_shell_call", "web_search_call"}
 CODEX_TOOL_RESULTS = {"function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+CODEX_TOOL_ITEMS = {"CommandExecution", "FileChange", "McpToolCall", "WebSearch", "ImageView", "SubAgentActivity", "Extension"}
+CODEX_MESSAGE_ITEMS = {"UserMessage", "AgentMessage", "Plan", "ExitedReviewMode"}
+CODEX_INTERNAL_ITEMS = {"Reasoning", "ContextCompaction", "EnteredReviewMode"}
 TOOL_ROLES = {"TOOL_CALL", "TOOL_RESULT"}
 
 
@@ -422,11 +428,26 @@ def _tool_message(payload: Record, *, result: bool = False) -> Message:
 
 def _claude_record(record: Record, calls: dict[str, tuple[str, Record]], *, include_tools: bool = False) -> Iterator[Entry]:
     kind = record.get("type")
+    if kind == "api-request-blob":
+        # These are wire-request snapshots (including setup, reasoning and tool
+        # definitions), not new conversation messages or tool executions.
+        return
+    if kind == "attachment":
+        attachment = _mapping(record.get("attachment"))
+        origin = _mapping(attachment.get("origin")).get("kind")
+        if attachment.get("type") == "queued_command" and origin not in {"task-notification", "peer"}:
+            visible = _message("USER", _visible_parts(attachment.get("prompt"), user=True, human=origin == "human"))
+            if visible:
+                yield visible
+        return
     if kind == "system" and record.get("subtype") == "away_summary":
         yield Message("SUMMARY", str(record.get("content", "")))
         return
+    if kind == "system" and record.get("subtype") == "compact_boundary":
+        yield Message("NOTICE", "Context compacted; earlier exchanges retained above.")
+        return
     if kind not in {"user", "assistant"}:
-        if kind not in {"system", "attachment"} and isinstance(record.get("message"), dict):
+        if kind != "system" and isinstance(record.get("message"), dict):
             warnings.warn(f"Unknown Claude conversation record: {kind}", ExportWarning, stacklevel=2)
             text = "\n\n".join(_visible_parts(_mapping(record["message"]).get("content")))
             yield Message("NOTICE", f"Unrecognized {kind} message:\n{text}")
@@ -492,11 +513,16 @@ def _claude_record(record: Record, calls: dict[str, tuple[str, Record]], *, incl
                 yield visible
 
 
-def _claude_entries(path: Path, seen: set[str] | None = None, *, include_tools: bool = False) -> Iterator[Entry]:
-    calls: dict[str, tuple[str, Record]] = {}
+def _claude_entries(
+    path: Path, seen: set[str] | None = None, calls: dict[str, tuple[str, Record]] | None = None, *, include_tools: bool = False
+) -> Iterator[Entry]:
+    calls = calls if calls is not None else {}
     seen = seen if seen is not None else set()
     for record in _records(path):
         uuid = record.get("uuid")
+        attachment = _mapping(record.get("attachment"))
+        if record.get("type") == "attachment" and attachment.get("type") == "queued_command":
+            uuid = attachment.get("source_uuid") or uuid
         duplicate = isinstance(uuid, str) and uuid in seen
         if isinstance(uuid, str):
             seen.add(uuid)
@@ -512,6 +538,11 @@ def _codex_message(payload: Record) -> Message | None:
     if role not in {"user", "assistant"} or payload.get("phase") == "analysis" or payload.get("channel") == "analysis":
         return None
     message = _message("USER" if role == "user" else "AGENT", _visible_parts(payload.get("content"), user=role == "user"))
+    if message and role == "user":
+        reply = re.fullmatch(r"<send_user_message_question_reply>\s*(.*?)\s*</send_user_message_question_reply>", message.text, re.S)
+        answers = _decoded(reply[1]) if reply else None
+        if isinstance(answers, list) and answers and all(isinstance(a, dict) and "answer" in a for a in answers):
+            message = replace(message, text="\n\n".join(f"{a.get('question', 'Answer')}\n{_display(a['answer'])}" for a in answers))
     if message and role == "assistant":
         plan = re.fullmatch(r"\s*<proposed_plan>\s*(.*?)\s*</proposed_plan>\s*", message.text, re.S)
         if plan:
@@ -595,10 +626,13 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None, include_t
         return scope, str(payload.get("type")), str(payload.get("call_id")), json.dumps(payload.get("output"), sort_keys=True)
 
     tool_counts: Counter[tuple[str, str, str, str]] = Counter()
+    tool_ids: set[tuple[str, str]] = set()
     for scope, _, record in _codex_records(paths):
         payload = _mapping(record.get("payload"))
         if include_tools and record.get("type") == "response_item" and payload.get("type") in CODEX_TOOL_RESULTS:
             tool_counts[result_key(scope, payload)] += 1
+        if include_tools and record.get("type") == "response_item" and payload.get("type") in CODEX_TOOL_CALLS | CODEX_TOOL_RESULTS:
+            tool_ids.update((scope, value) for key in ("id", "call_id") if isinstance(value := payload.get(key), str))
         representation = _codex_representation(record)
         if representation:
             lane, message = representation
@@ -630,6 +664,12 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None, include_t
                     tool_counts[key] -= 1
                 else:
                     yield _located(_tool_message(payload, result=True), record, path)
+            elif record.get("type") == "event_msg" and kind == "item_completed":
+                item = _mapping(payload.get("item"))
+                # Executable scripts can invoke tools without returning their
+                # output. These completed items retain those nested results.
+                if item.get("type") in CODEX_TOOL_ITEMS and (scope, item.get("id")) not in tool_ids:
+                    yield _located(_tool_message(item, result=True), record, path)
         visible = None
         representation = _codex_representation(record)
         if representation:
@@ -667,7 +707,13 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None, include_t
                 warnings.warn(f"{path}:{record['_line']}: unknown Codex response type: {kind}", ExportWarning, stacklevel=2)
                 visible = Message("NOTICE", f"[Unsupported {kind} response; see source log]")
         elif record.get("type") == "event_msg":
-            if kind == "turn_aborted":
+            if kind == "item_completed":
+                item = _mapping(payload.get("item"))
+                item_type = item.get("type")
+                if item_type not in CODEX_MESSAGE_ITEMS | CODEX_TOOL_ITEMS | CODEX_INTERNAL_ITEMS:
+                    warnings.warn(f"{path}:{record['_line']}: unknown Codex completed item: {item_type}", ExportWarning, stacklevel=2)
+                    visible = Message("NOTICE", f"[Unsupported {item_type} item; see source log]")
+            elif kind == "turn_aborted":
                 visible = Message("NOTICE", "Turn interrupted: " + str(payload.get("reason", "unspecified")))
             elif kind == "thread_rolled_back":
                 visible = Message(
@@ -782,9 +828,16 @@ def _codex_segment_order(paths: Sequence[Path], session_id: str) -> list[Path] |
     if len(bases) > 1:
         return None
     resumes = [(path, meta) for path, meta in headers if meta.get("history_base")]
-    if any(_mapping(meta.get("history_base")).get("thread_id") != session_id for _, meta in resumes):
-        return None
     resumes.sort(key=lambda pair: (str(pair[1].get("timestamp", "")), str(pair[0])))
+    known = {session_id}
+    for path, meta in [*bases, *resumes]:
+        if meta.get("history_base") and _mapping(meta.get("history_base")).get("thread_id") not in known:
+            return None
+        # A later resume may reference the previous segment's storage ID,
+        # while every header continues to carry the original thread ID.
+        prefix, separator, segment_id = path.stem.rpartition("_")
+        if separator and prefix.endswith(f"-{session_id}"):
+            known.add(segment_id)
     return [path for path, _ in [*bases, *resumes]]
 
 
@@ -971,10 +1024,11 @@ def conversation_entries(
         return
     paths = [path] if single_session else continuation_paths(path)
     seen: set[str] = set()
+    calls: dict[str, tuple[str, Record]] = {}
     for source in paths:
         if len(paths) > 1:
             yield Message("NOTICE", f"Session {source.stem}", source=str(source))
-        yield from _claude_entries(source, seen, include_tools=include_tools)
+        yield from _claude_entries(source, seen, calls, include_tools=include_tools)
 
 
 def conversation_from(path: Path, *, single_session: bool = False) -> Iterator[Message]:
@@ -1458,7 +1512,7 @@ def export(
                 conversation_entries(path, single_session=single_session, session_format=session_format, include_tools=include_tools)
             )
             info = session_info(path, session_format)
-            if session_format is SessionFormat.CODEX and not single_session:
+            if not single_session:
                 first_source = next((entry.source for entry in entries if isinstance(entry, Message) and entry.source), None)
                 if first_source and Path(first_source) != path:
                     info = session_info(Path(first_source), session_format)

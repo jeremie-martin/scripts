@@ -51,7 +51,8 @@ compresses what was done:
   and reasoning effort used, the session ID, and the source log path.
 - The conversation in turns: one `## User` or `## Agent` section per speaker change,
   including slash commands, questions and choices, submitted answers, proposed plans
-  and approvals, readable summaries, and attachment references.
+  and approvals, messages queued while the agent was working, readable summaries,
+  and attachment references.
 - One line at the end of each agent turn summarizing its tool use, such as
   `Tool activity: 28 commands; edited src/server.py, README.md; 2 web lookups.`
   This typically adds 1–3% to the transcript.
@@ -61,11 +62,17 @@ compresses what was done:
 By default, model reasoning, tool calls and their output, and injected setup context
 are omitted. Add `--include-tools` to include recorded tool calls, arguments, and
 results in source order, including executable tool scripts, shell calls, and web
-search calls. Tool details appear as labeled JSON blocks in Markdown and text.
+search calls. Codex's separately recorded nested tool results are retained even
+when the surrounding script did not return them. Tool details appear as labeled
+JSON blocks in Markdown and text.
 This works with continuation/resume logs and can be combined with `--no-activity`
 to omit the summary lines. Reasoning and injected setup context remain omitted.
 Only details present in the source logs can be exported; truncated tool output
 cannot be recovered.
+
+Claude API request snapshots and tool definitions, and Codex's injected repository
+instructions, are setup/bookkeeping rather than dialogue. They remain omitted in
+both modes. Adding tool details preserves the same visible conversation.
 
 The `text` format has the same structure without markdown; `json` is one object per
 message with its source file, JSONL line, and timestamp. With `--include-tools`,
@@ -75,7 +82,10 @@ contains the recorded payload serialized as JSON, including call IDs when presen
 Explicit Claude continuation links are followed in both directions by default;
 copied records are deduplicated by message UUID. Codex resume files carrying the
 same thread ID and explicit history-base metadata are joined across dated session
-and archive directories, including when a resume file is selected directly. Each
+and archive directories, including links to a previous resume's storage ID and
+when a resume file is selected directly. Pending questions and plans remain
+connected to answers in later files. Joined exports use the first file's session
+identity, title, and start date, whichever continuation was selected. Each
 file boundary is marked; earlier exchanges are retained even when a resume starts
 from an older history checkpoint. Codex's response, event, and
 completed-item representations are matched by occurrence within a turn, so
@@ -97,12 +107,17 @@ To audit format coverage against recent local logs without printing their text:
 
 ```bash
 uv run --project tools/agent-export python tools/agent-export/dev/audit_agent_export.py --days 7
-uv run --project tools/agent-export pytest tools/agent-export/tests
+uv run --project tools/agent-export --locked pytest tools/agent-export/tests
 ```
 
 The audit selects files by modification time and inspects their full history,
-including subagent logs as format samples. It reports structural counts, export
-warnings, and any command or recognized dialogue-tool calls absent from the export.
+including subagent logs as format samples. It checks both export modes, then joins
+interactive conversations and checks both modes again. It reports structural
+counts, warnings, missing human dialogue or recognized dialogue-tool calls, and
+missing tool details, without printing conversation text. It exits nonzero on
+problems. This checks format coverage; it cannot guarantee support for future
+agent log formats. Unknown conversation records still warn, and `--strict` refuses
+to write an incomplete export.
 
 
 ## Develop
