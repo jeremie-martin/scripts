@@ -1,15 +1,11 @@
-from __future__ import annotations
+#!/usr/bin/env python3
+"""Scaffold a throwaway project under ~/prog/quick and print its path."""
 
+import argparse
 import re
 import subprocess
+import sys
 from pathlib import Path
-
-import typer
-
-app = typer.Typer(
-    add_completion=False,
-    help="Scaffold a throwaway project under ~/prog/quick/. Plain positional args, no wizard.",
-)
 
 BASE_DIR = Path.home() / "prog" / "quick"
 TYPES = ("python", "node", "cpp", "empty")
@@ -20,12 +16,6 @@ GITIGNORE = {
     "cpp": "build/\n*.o\n*.out\n",
     "empty": ".env\n",
 }
-
-NAME_ARGUMENT = typer.Argument("scratch", help="Project name (becomes the directory name).")
-TYPE_ARGUMENT = typer.Argument("empty", help=f"Project flavour: {', '.join(TYPES)}.")
-BASE_OPTION = typer.Option(BASE_DIR, "--base", help="Parent directory to create the project in.")
-GIT_OPTION = typer.Option(True, "--git/--no-git", help="Initialise a git repository.")
-FORCE_OPTION = typer.Option(False, "--force", "-f", help="Reuse the directory if it already exists.")
 
 
 def _write(path: Path, content: str) -> None:
@@ -83,34 +73,15 @@ SCAFFOLDS = {
 }
 
 
-@app.command()
-def run(
-    name: str = NAME_ARGUMENT,
-    type: str = TYPE_ARGUMENT,
-    base: Path = BASE_OPTION,
-    git: bool = GIT_OPTION,
-    force: bool = FORCE_OPTION,
-) -> None:
-    """Create a new project skeleton and print its path."""
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name):
-        typer.echo("Project name must start with a letter and contain only letters, digits, underscores, or hyphens.", err=True)
-        raise typer.Exit(2)
-    flavour = type.lower()
-    if flavour not in TYPES:
-        typer.echo(f"Unknown type '{type}'. Choose one of: {', '.join(TYPES)}.", err=True)
-        raise typer.Exit(2)
-
+def create(name: str, flavour: str, base: Path, git: bool, force: bool) -> Path:
     dest = (base.expanduser() / name).resolve()
     if dest.exists() and not force:
-        typer.echo(f"Refusing to overwrite existing directory: {dest} (use --force)", err=True)
-        raise typer.Exit(1)
+        raise FileExistsError(f"Refusing to overwrite existing directory: {dest} (use --force)")
     dest.mkdir(parents=True, exist_ok=True)
-
     try:
         SCAFFOLDS[flavour](dest, name)
     except (OSError, subprocess.CalledProcessError) as exc:
-        typer.echo(f"Scaffold step failed: {exc}", err=True)
-        raise typer.Exit(1) from exc
+        raise RuntimeError(f"Scaffold step failed: {exc}") from exc
 
     # README + .gitignore unless the scaffolder already supplied them (uv writes a README).
     readme = dest / "README.md"
@@ -124,17 +95,36 @@ def run(
         try:
             subprocess.run(["git", "init", "-q", str(dest)], check=True)
         except (OSError, subprocess.CalledProcessError) as exc:
-            typer.echo(f"Git initialization failed: {exc}", err=True)
-            raise typer.Exit(1) from exc
+            raise RuntimeError(f"Git initialization failed: {exc}") from exc
+    return dest
 
-    typer.echo(f"Created {flavour} project at {dest}", err=True)
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="quick", description=__doc__)
+    parser.add_argument("name", nargs="?", default="scratch", help="project name; becomes the directory name (default: scratch)")
+    parser.add_argument("type", nargs="?", default="empty", help=f"{', '.join(TYPES)} (default: empty)")
+    parser.add_argument("--base", type=Path, default=BASE_DIR, help="parent directory (default: ~/prog/quick)")
+    parser.add_argument("--git", action=argparse.BooleanOptionalAction, default=True, help="initialise a git repository")
+    parser.add_argument("-f", "--force", action="store_true", help="reuse the directory if it already exists")
+    args = parser.parse_args(argv)
+
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", args.name):
+        print("Project name must start with a letter and contain only letters, digits, underscores, or hyphens.", file=sys.stderr)
+        return 2
+    flavour = args.type.lower()
+    if flavour not in TYPES:
+        print(f"Unknown type '{args.type}'. Choose one of: {', '.join(TYPES)}.", file=sys.stderr)
+        return 2
+    try:
+        dest = create(args.name, flavour, args.base, args.git, args.force)
+    except (FileExistsError, RuntimeError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"Created {flavour} project at {dest}", file=sys.stderr)
     # Bare path on stdout so it's usable in a subshell, e.g. cd "$(quick foo)".
-    typer.echo(str(dest))
-
-
-def main() -> None:
-    app()
+    print(dest)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

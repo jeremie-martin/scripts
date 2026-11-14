@@ -68,35 +68,33 @@ def test_independent_installations(tmp_path, wheels, mode):
         if any(dep.startswith("scripts-clipboard") for dep in project.get("dependencies", [])):
             source = run([interpreter, "-c", "import scripts_clipboard; print(scripts_clipboard.__file__)"], tmp_path, env)
             assert str(ROOT / "packages/clipboard" if mode == "editable" else tmp_path / "envs") in source
-    run([tmp_path / "bin/quick", "sample", "empty", "--base", tmp_path, "--no-git"], tmp_path, env)
-    assert (tmp_path / "sample").is_dir()
     markdown = tmp_path / "sample.md"
     markdown.write_text("# Installation probe\n")
     html = run([tmp_path / "bin/mdclip", markdown, "--print-html"], tmp_path, env)
     assert "<h1 " in html and ">Installation probe</h1>" in html
     run([tmp_path / "envs/scripts-ffcut/bin/python", "-m", "yt_dlp", "--version"], tmp_path, env)
-    run(["uv", "tool", "uninstall", "scripts-quick"], tmp_path, env)
-    assert not (tmp_path / "bin/quick").exists()
+    run(["uv", "tool", "uninstall", "scripts-ffcut"], tmp_path, env)
+    assert not (tmp_path / "bin/ffcut").exists()
     run([tmp_path / "bin/concat", "--help"], tmp_path, env)
 
 
 def test_editable_changes_and_entrypoint_refresh(tmp_path):
     env = environment(tmp_path)
-    project = tmp_path / "quick"
-    shutil.copytree(ROOT / "tools/quick", project, ignore=shutil.ignore_patterns(".venv", "__pycache__", "*.egg-info"))
+    project = tmp_path / "ffcut"
+    shutil.copytree(ROOT / "tools/ffcut", project, ignore=shutil.ignore_patterns(".venv", "__pycache__", "*.egg-info"))
     run(["uv", "tool", "install", "--editable", project], tmp_path, env)
-    source = project / "scripts_quick.py"
+    source = project / "scripts_ffcut.py"
     source.write_text(source.read_text() + '\n\ndef probe():\n    print("editable-probe")\n')
     assert "editable-probe" in run(
-        [tmp_path / "envs/scripts-quick/bin/python", "-c", "import scripts_quick; scripts_quick.probe()"], tmp_path, env
+        [tmp_path / "envs/scripts-ffcut/bin/python", "-c", "import scripts_ffcut; scripts_ffcut.probe()"], tmp_path, env
     )
     metadata = project / "pyproject.toml"
-    metadata.write_text(metadata.read_text().replace("[project.scripts]", '[project.scripts]\nquick-probe = "scripts_quick:probe"'))
+    metadata.write_text(metadata.read_text().replace("[project.scripts]", '[project.scripts]\nffcut-probe = "scripts_ffcut:probe"'))
     run(["uv", "tool", "install", "--reinstall", "--editable", project], tmp_path, env)
-    assert "editable-probe" in run([tmp_path / "bin/quick-probe"], tmp_path, env)
+    assert "editable-probe" in run([tmp_path / "bin/ffcut-probe"], tmp_path, env)
 
 
-@pytest.mark.parametrize("name", ["import-photos", "ssh-clipboard", "nsxiv-open-dir", "latest"])
+@pytest.mark.parametrize("name", ["import-photos", "ssh-clipboard", "nsxiv-open-dir", "latest", "gdiffpath", "quick"])
 def test_standalone_links_and_collision_protection(tmp_path, name):
     env = environment(tmp_path)
     bindir = tmp_path / "bin with spaces"

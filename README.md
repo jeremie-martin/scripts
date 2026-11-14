@@ -9,12 +9,10 @@ application, shared runtime environment, or deployment service.
 | [transcript](tools/transcript/) | Fetch video transcripts |
 | [ffcut](tools/ffcut/) | Download and cut media |
 | [gdiffpath](tools/gdiffpath/) | Inspect Git changes by path |
-| [clipmedia](tools/clipmedia/) | Copy media to the clipboard |
 | [mdclip](tools/mdclip/) | Copy Markdown as rich text |
 | [quick](tools/quick/) | Create a small project |
 | [screenshot](tools/screenshot/) | Capture screens, optionally with OCR |
 | [agent-export](tools/agent-export/) | Export agent conversations |
-| [image-tools](tools/image-tools/) | Image conversion: 2twi, 2work, img-twi, img-work |
 | [import-photos](tools/import-photos/) | Import photographs |
 | [ssh-clipboard](tools/ssh-clipboard/) | Transfer clipboard content over SSH |
 | [nsxiv-open-dir](tools/nsxiv-open-dir/) | Open an image's directory in nsxiv |

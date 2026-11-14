@@ -1,6 +1,6 @@
 target-version = "py312"
 line-length = 140
-extend-include = ["tools/ssh-clipboard/ssh-clipboard", "tools/latest/latest"]
+extend-include = ["tools/ssh-clipboard/ssh-clipboard", "tools/latest/latest", "tools/gdiffpath/gdiffpath", "tools/quick/quick"]
 
 [per-file-target-version]
 "tools/ssh-clipboard/ssh-clipboard" = "py38"
