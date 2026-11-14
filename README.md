@@ -18,6 +18,7 @@ application, shared runtime environment, or deployment service.
 | [import-photos](tools/import-photos/) | Import photographs |
 | [ssh-clipboard](tools/ssh-clipboard/) | Transfer clipboard content over SSH |
 | [nsxiv-open-dir](tools/nsxiv-open-dir/) | Open an image's directory in nsxiv |
+| [latest](tools/latest/) | List the most recently modified files |
 
 ## Install and update
 

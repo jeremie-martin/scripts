@@ -3,7 +3,7 @@ UV ?= uv
 BINDIR ?= $(shell $(UV) tool dir --bin)
 PYTHON_TOOLS := concat transcript ffcut gdiffpath clipmedia mdclip quick screenshot agent-export image-tools
 PYTHON_PROJECTS := $(addprefix tools/,$(PYTHON_TOOLS)) packages/clipboard
-SCRIPT_TOOLS := import-photos ssh-clipboard nsxiv-open-dir
+SCRIPT_TOOLS := import-photos ssh-clipboard nsxiv-open-dir latest
 
 .PHONY: help install install-screenshot-ocr lint test test-installation check build $(addprefix install-,$(PYTHON_TOOLS) $(SCRIPT_TOOLS))
 help:
@@ -29,6 +29,8 @@ install-ssh-clipboard:
 	$(call link_script,tools/ssh-clipboard/ssh-clipboard,ssh-clipboard)
 install-nsxiv-open-dir:
 	$(call link_script,tools/nsxiv-open-dir/nsxiv-open-dir,nsxiv-open-dir)
+install-latest:
+	$(call link_script,tools/latest/latest,latest)
 
 lint:
 	$(UV) tool run --from ruff==0.13.3 ruff check .

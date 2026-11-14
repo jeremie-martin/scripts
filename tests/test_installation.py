@@ -96,7 +96,7 @@ def test_editable_changes_and_entrypoint_refresh(tmp_path):
     assert "editable-probe" in run([tmp_path / "bin/quick-probe"], tmp_path, env)
 
 
-@pytest.mark.parametrize("name", ["import-photos", "ssh-clipboard", "nsxiv-open-dir"])
+@pytest.mark.parametrize("name", ["import-photos", "ssh-clipboard", "nsxiv-open-dir", "latest"])
 def test_standalone_links_and_collision_protection(tmp_path, name):
     env = environment(tmp_path)
     bindir = tmp_path / "bin with spaces"

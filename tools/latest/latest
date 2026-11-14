@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""List the most recently modified files, newest last."""
+
+import argparse
+import os
+import re
+import sys
+import time
+
+USAGE = """\
+usage: latest [WORD ...] [-H] [-l] [-0]
+
+List the most recently modified files, newest at the bottom. Words may come in any order:
+
+  mp4, png, csv ...     file extensions
+  video, image, audio   common extensions of that kind (also vid, img)
+  30m, 2h, 1d, 1w       only files modified within that long
+  5                     how many to show (default 10)
+  all                   no limit
+  build, ~/renders      directories to search (default: the current one)
+
+  -H   include hidden files and directories
+  -l   keep the detailed listing when piped
+  -0   separate paths with NUL instead of newline
+
+A terminal gets age, date, size and path; a pipe gets bare paths:
+
+  latest mp4                 the 10 newest mp4 files below here
+  latest image build 1d      images under build/ from the last day
+  mpv "$(latest video 1)"    play the newest video
+
+A word that is both a file type and a directory is the type; write ./png for the directory.
+"""
+
+KINDS = {
+    "video": "mp4 mkv mov webm avi m4v mpg mpeg ts",
+    "image": "png jpg jpeg webp gif bmp tif tiff avif heic jxl svg exr",
+    "audio": "wav mp3 flac ogg opus m4a aac",
+}
+KINDS = {kind: frozenset(exts.split()) for kind, exts in KINDS.items()}
+ALIASES = {"vid": "video", "videos": "video", "img": "image", "images": "image"}
+KNOWN_EXTS = frozenset().union(*KINDS.values())
+UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+AGE = re.compile(r"(\d+)([smhdw])")
+EXT = re.compile(r"\.?(\w+)")
+DEFAULT_LIMIT = 10
+
+
+class Query:
+    def __init__(self, words):
+        self.roots, self.exts, self.types = [], set(), []
+        self.limit, self.within = DEFAULT_LIMIT, None
+        for word in words:
+            self._add(word)
+        self.roots = list(dict.fromkeys(self.roots)) or ["."]
+
+    def _add(self, word):
+        low = word.lower()
+        kind = ALIASES.get(low, low)
+        if low == "all":
+            self.limit = None
+        elif word.isdecimal():
+            if int(word) == 0:
+                raise ValueError("count must be at least 1 (or 'all')")
+            self.limit = int(word)
+        elif age := AGE.fullmatch(low):
+            self.within = word, int(age[1]) * UNITS[age[2]]
+        elif kind in KINDS:
+            self.exts |= KINDS[kind]
+            self.types.append(kind)
+        elif low.removeprefix(".") in KNOWN_EXTS:
+            self._add_ext(low)
+        elif os.path.isdir(word):
+            self.roots.append(word)
+        elif os.sep in word or not EXT.fullmatch(word):
+            raise ValueError(f"no such directory: {word}")
+        else:
+            self._add_ext(low)
+
+    def _add_ext(self, word):
+        ext = word.removeprefix(".")
+        self.exts.add(ext)
+        self.types.append(ext)
+
+    def describe(self):
+        """Say how the words were understood, so a typo is visible in the 'nothing found' message."""
+        text = f"no {'/'.join(self.types)} files" if self.types else "no files"
+        text += f" under {', '.join(self.roots)}"
+        if self.within:
+            text += f" modified in the last {self.within[0]}"
+        return text
+
+
+def scan(root, exts, hidden, cutoff):
+    """Yield (mtime, path, size) for matching files below root. Only matching names are stat'ed."""
+    stack = [root]
+    while stack:
+        try:
+            entries = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with entries:
+            for entry in entries:
+                name = entry.name
+                if not hidden and name.startswith("."):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                        continue
+                    if exts:
+                        _, dot, ext = name.rpartition(".")
+                        if not dot or ext.lower() not in exts:
+                            continue
+                    if not entry.is_file():
+                        continue
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime >= cutoff:
+                    yield stat.st_mtime, entry.path.removeprefix("./"), stat.st_size
+
+
+def age(seconds):
+    if seconds < 1:
+        return "now"
+    for limit, step, unit in (
+        (60, 1, "s"),
+        (3600, 60, "m"),
+        (86400, 3600, "h"),
+        (14 * 86400, 86400, "d"),
+        (63 * 86400, 604800, "w"),
+        (365 * 86400, 30 * 86400, "mo"),
+    ):
+        if seconds < limit:
+            return f"{int(seconds // step)}{unit}"
+    return f"{int(seconds // (365 * 86400))}y"
+
+
+def date(mtime, now):
+    when = time.localtime(mtime)
+    recent = abs(now - mtime) < 182 * 86400
+    return time.strftime("%b %e %H:%M" if recent else "%b %e  %Y", when)
+
+
+def size(count):
+    for unit in "BKMGT":
+        if count < 1000 or unit == "T":
+            return f"{count:.0f}{unit}" if unit == "B" or count >= 10 else f"{count:.1f}{unit}"
+        count /= 1024
+
+
+def table(rows, hidden_count, now, color):
+    def paint(code, text):
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    lines = [paint("2", f"      … {hidden_count} more")] if hidden_count else []
+    for mtime, path, nbytes in rows:
+        seconds = now - mtime
+        tone = "1;32" if seconds < 3600 else "33" if seconds < 86400 else "0" if seconds < 604800 else "2"
+        folder, name = os.path.split(path)
+        folder = paint("2", os.path.join(folder, "")) if folder else ""
+        lines.append(
+            f"{paint(tone, f'{age(seconds):>4}')}  {paint('2', date(mtime, now))}  "
+            f"{paint('2', f'{size(nbytes):>5}')}  {folder}{paint('1', name)}"
+        )
+    return "".join(line + "\n" for line in lines)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="latest", usage=USAGE, add_help=False)
+    parser.add_argument("words", nargs="*")
+    parser.add_argument("-H", "--hidden", action="store_true")
+    parser.add_argument("-l", "--long", action="store_true")
+    parser.add_argument("-0", "--null", action="store_true")
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.format_usage = lambda: "usage: latest [WORD ...] [-H] [-l] [-0]   (latest -h for help)\n"
+    args = parser.parse_intermixed_args(argv)
+    if args.help:
+        sys.stdout.write(USAGE)
+        return 0
+    try:
+        query = Query(args.words)
+    except ValueError as error:
+        print(f"latest: {error}", file=sys.stderr)
+        return 2
+
+    now = time.time()
+    cutoff = now - query.within[1] if query.within else float("-inf")
+    found = [match for root in query.roots for match in scan(root, query.exts, args.hidden, cutoff)]
+    if not found:
+        print(f"latest: {query.describe()}", file=sys.stderr)
+        return 1
+    found.sort(key=lambda match: (-match[0], match[1]))
+    rows = found[: query.limit][::-1]  # the newest ends up next to the prompt
+
+    tty = sys.stdout.isatty()
+    if args.null:
+        text = "".join(path + "\0" for _, path, _ in rows)
+    elif tty or args.long:
+        color = tty and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
+        text = table(rows, len(found) - len(rows), now, color)
+    else:
+        text = "".join(path + "\n" for _, path, _ in rows)
+    try:
+        sys.stdout.buffer.write(os.fsencode(text))
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
