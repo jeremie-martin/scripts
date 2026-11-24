@@ -402,6 +402,14 @@ def _codex_tool_uses(payload: Record) -> Iterator[ToolUse]:
 
 CODEX_TOOL_CALLS = {"function_call", "custom_tool_call", "local_shell_call", "web_search_call"}
 CODEX_TOOL_RESULTS = {"function_call_output", "custom_tool_call_output", "local_shell_call_output"}
+CODEX_KNOWN_RESPONSES = CODEX_TOOL_CALLS | CODEX_TOOL_RESULTS | {
+    "message",
+    "agent_message",
+    "reasoning",
+    "compaction",
+    "additional_tools",  # Tool definitions, rather than invocations.
+    "configuration_update",  # Model and effort come from turn_context.
+}
 CODEX_TOOL_ITEMS = {"CommandExecution", "FileChange", "McpToolCall", "WebSearch", "ImageView", "SubAgentActivity", "Extension"}
 CODEX_MESSAGE_ITEMS = {"UserMessage", "AgentMessage", "Plan", "ExitedReviewMode"}
 CODEX_INTERNAL_ITEMS = {"Reasoning", "ContextCompaction", "EnteredReviewMode"}
@@ -691,19 +699,7 @@ def _codex_entries(path: Path, *, paths: Sequence[Path] | None = None, include_t
                 warnings.warn(
                     f"{path}:{record['_line']}: question inside executable tool code cannot be decoded", ExportWarning, stacklevel=2
                 )
-            elif kind not in {
-                "message",
-                "reasoning",
-                "agent_message",
-                "function_call",
-                "function_call_output",
-                "custom_tool_call",
-                "custom_tool_call_output",
-                "web_search_call",
-                "compaction",
-                "local_shell_call",
-                "local_shell_call_output",
-            }:
+            elif kind not in CODEX_KNOWN_RESPONSES:
                 warnings.warn(f"{path}:{record['_line']}: unknown Codex response type: {kind}", ExportWarning, stacklevel=2)
                 visible = Message("NOTICE", f"[Unsupported {kind} response; see source log]")
         elif record.get("type") == "event_msg":
@@ -788,7 +784,8 @@ def _record_session_ids(record: Record) -> set[str]:
             ids.add(value)
 
     payload = _mapping(record.get("payload"))
-    for key in ("sessionId", "session_id", "id"):
+    keys = ("sessionId", "session_id", "id") if record.get("type") == "session_meta" else ("sessionId", "session_id")
+    for key in keys:
         value = payload.get(key)
         if isinstance(value, str):
             ids.add(value)
@@ -871,16 +868,15 @@ def codex_continuation_paths(path: Path) -> list[Path]:
     return paths
 
 
-def _candidate_matches(path: Path, session_id: str) -> bool:
-    if _filename_matches(path, session_id):
-        return True
-
+def _matches_session_metadata(path: Path, session_id: str) -> bool:
     # This is primarily for Claude layouts whose filename is not the session
     # ID. Session metadata is near the beginning, so bounded inspection keeps
     # lookup cheap even with very large transcripts.
     try:
-        return any(session_id in _record_session_ids(record) for record in islice(_records(path), 64))
-    except SessionError:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            records = filter(None, map(_json_object, handle))
+            return any(session_id in _record_session_ids(record) for record in islice(records, 64))
+    except OSError:
         return False
 
 
@@ -924,7 +920,7 @@ def resolve_session(source: str, roots: Sequence[Path] = DEFAULT_SESSION_ROOTS) 
         matches = filename_matches
     else:
         metadata_matches = _unique_resolved(
-            candidate for candidate in candidates if candidate.is_file() and _candidate_matches(candidate, source)
+            candidate for candidate in candidates if candidate.is_file() and _matches_session_metadata(candidate, source)
         )
         matches = metadata_matches
 
@@ -1273,14 +1269,15 @@ def _blocks(entries: Iterable[Entry], cwd: str | None, activity: bool, code: str
 
 
 def _models(entries: Iterable[Entry]) -> list[ModelChange]:
-    models: list[ModelChange] = []
+    models: dict[ModelChange, None] = {}
+    current: ModelChange | None = None
     for entry in entries:
         if isinstance(entry, ModelChange):
-            if entry.effort is None and models:
-                entry = replace(entry, effort=models[-1].effort)
-            if entry not in models:
-                models.append(entry)
-    return models
+            if entry.effort is None and current:
+                entry = replace(entry, effort=current.effort)
+            current = entry
+            models[entry] = None
+    return list(models)
 
 
 def _span(entries: Sequence[Entry], info: SessionInfo) -> str | None:

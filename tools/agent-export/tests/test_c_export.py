@@ -150,6 +150,26 @@ def event(kind: str, **payload: object) -> dict:
     return {"type": "event_msg", "payload": {"type": kind, **payload}}
 
 
+def test_strict_session_lookup_ignores_corrupt_unrelated_logs_and_tool_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = write_jsonl(
+        tmp_path / "renamed.jsonl",
+        [
+            {"type": "session_meta", "payload": {"id": "session-id", "originator": "codex-tui"}},
+            response("message", role="user", content="Hello"),
+        ],
+    )
+    bad = tmp_path / "unrelated.jsonl"
+    bad.write_text('{"truncated":\n')
+    monkeypatch.setattr(scripts_agent_export, "resolve_session", lambda source: resolve_session(source, (tmp_path,)))
+    result = CliRunner().invoke(app, ["session-id", "--strict", "-o", "-"])
+    assert result.exit_code == 0, result.stderr
+    assert "Hello" in result.stdout
+    assert result.stderr == ""
+
+    write_jsonl(bad, [response("custom_tool_call", id="session-id")])
+    assert resolve_session("session-id", (tmp_path,)) == path
+
+
 def test_commands_questions_answers_plan_and_approval(tmp_path: Path) -> None:
     question = {"question": "Which color?", "options": [{"label": "Blue", "description": "Cool"}, {"label": "Red"}]}
     path = write_jsonl(
@@ -705,6 +725,29 @@ def test_unknown_response_and_message_event_are_visible_and_warn(tmp_path: Path)
     assert "Important reply" in exported
 
 
+@pytest.mark.parametrize("include_tools", [False, True])
+def test_codex_tool_definitions_and_configuration_updates_are_omitted(tmp_path: Path, include_tools: bool) -> None:
+    path = write_jsonl(
+        tmp_path / "session.jsonl",
+        [
+            response("additional_tools", id="definitions", role="developer", tools=[{"name": "private-tool"}]),
+            {"type": "turn_context", "payload": {"model": "gpt-a", "effort": "high"}},
+            response("message", role="user", content="Hello"),
+            response("configuration_update", reasoning={"effort": "high"}),
+            response("message", role="assistant", content="Done"),
+        ],
+    )
+    args = [str(path), "--strict", "-o", "-"]
+    if include_tools:
+        args.append("--include-tools")
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.stderr
+    assert result.stderr == ""
+    assert "- **Model:** gpt-a (high effort)" in result.stdout
+    assert result.stdout.endswith("## User\n\nHello\n\n## Agent\n\nDone\n")
+    assert "private-tool" not in result.stdout
+
+
 def test_cli_refuses_output_symlink_to_another_session(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
@@ -801,6 +844,23 @@ def test_codex_exec_scripts_and_turn_context_become_activity(tmp_path: Path) -> 
     text = render(entries_from(path), info=session_info(path))
     assert "*Tool activity: 2 commands; edited `x.py`, `y.py`; 1 web lookup.*" in text
     assert text.endswith("> Switched to gpt-b (medium effort).")
+
+
+def test_model_header_inherits_effort_from_the_active_model(tmp_path: Path) -> None:
+    path = write_jsonl(
+        tmp_path / "session.jsonl",
+        [
+            {"type": "turn_context", "payload": {"model": "gpt-a", "effort": "high"}},
+            response("message", role="user", content="Hello"),
+            {"type": "turn_context", "payload": {"model": "gpt-b", "effort": "low"}},
+            {"type": "turn_context", "payload": {"model": "gpt-a", "effort": "high"}},
+            {"type": "turn_context", "payload": {"model": "gpt-c"}},
+            response("message", role="assistant", content="Done"),
+        ],
+    )
+    text = render(entries_from(path), info=session_info(path))
+    assert "- **Models:** gpt-a (high effort), then gpt-b (low effort), then gpt-c (high effort)" in text
+    assert "> Switched to gpt-c (high effort)." in text
 
 
 def test_rewritten_codex_fragment_is_silent_but_lost_records_warn(tmp_path: Path) -> None:

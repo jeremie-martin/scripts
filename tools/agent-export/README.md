@@ -70,9 +70,10 @@ to omit the summary lines. Reasoning and injected setup context remain omitted.
 Only details present in the source logs can be exported; truncated tool output
 cannot be recovered.
 
-Claude API request snapshots and tool definitions, and Codex's injected repository
-instructions, are setup/bookkeeping rather than dialogue. They remain omitted in
-both modes. Adding tool details preserves the same visible conversation.
+Both modes omit Claude API request snapshots, tool definitions, and Codex's injected
+repository instructions and configuration updates. The export gets Codex model and
+reasoning effort from the turn context. Adding tool details preserves the same
+visible conversation.
 
 The `text` format has the same structure without markdown; `json` is one object per
 message with its source file, JSONL line, and timestamp. With `--include-tools`,
